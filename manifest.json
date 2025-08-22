@@ -11,11 +11,11 @@
   "background": {
     "service_worker": "service-worker.js"
   },
-  "permissions": ["tabCapture", "offscreen", "activeTab"],
+  "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
   "host_permissions": ["*://*/*"],
   "web_accessible_resources": [
     {
-      "resources": ["permission.html", "offscreen.html"],
+      "resources": ["permission.html", "offscreen.html", "history.html"],
       "matches": ["<all_urls>"]
     }
   ]

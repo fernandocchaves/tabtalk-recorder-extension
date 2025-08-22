@@ -78,18 +78,19 @@ async function startRecording(streamId) {
       mimeType: "audio/webm",
     });
     recorder.ondataavailable = (event) => data.push(event.data);
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       const blob = new Blob(data, { type: "audio/webm" });
-      const url = URL.createObjectURL(blob);
-
-      // Create temporary link element to trigger download
-      const downloadLink = document.createElement("a");
-      downloadLink.href = url;
-      downloadLink.download = `recording-${new Date().toISOString()}.webm`;
-      downloadLink.click();
+      const reader = new FileReader();
+      reader.onload = () => {
+        chrome.runtime.sendMessage({
+          type: "save-recording",
+          target: "service-worker",
+          data: reader.result,
+        });
+      };
+      reader.readAsDataURL(blob);
 
       // Cleanup
-      URL.revokeObjectURL(url);
       recorder = undefined;
       data = [];
 

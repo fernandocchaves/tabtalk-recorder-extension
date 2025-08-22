@@ -1,6 +1,7 @@
 // Get button elements
 const startButton = document.getElementById("startRecord");
 const stopButton = document.getElementById("stopRecord");
+const historyButton = document.getElementById("historyButton");
 
 let permissionStatus = document.getElementById("permissionStatus");
 
@@ -119,6 +120,10 @@ stopButton.addEventListener("click", () => {
     startButton.style.display = "block";
     setTimeout(() => startButton.classList.add("visible"), 10);
   }, 300);
+});
+
+historyButton.addEventListener("click", () => {
+  chrome.tabs.create({ url: "history.html" });
 });
 
 // Listen for messages from offscreen document and service worker

@@ -59,6 +59,11 @@ chrome.runtime.onMessage.addListener(async (message) => {
             : "icons/not-recording.png",
         });
         break;
+      case "save-recording":
+        const timestamp = new Date().getTime();
+        const key = `recording-${timestamp}`;
+        chrome.storage.local.set({ [key]: { data: message.data, timestamp } });
+        break;
     }
   }
 });
