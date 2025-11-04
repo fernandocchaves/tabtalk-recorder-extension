@@ -53,51 +53,76 @@ async function loadHistory() {
     const recordingId = key.replace("recording-", "");
 
     recordingCard.innerHTML = `
-      <div class="recording-info">
-        <div class="recording-icon">
-          <i class="fas fa-microphone"></i>
-        </div>
-        <div class="recording-details">
-          <div class="recording-name">${fileName}</div>
-          <div class="recording-meta">
-            <span class="duration" id="duration-${recordingId}">
-              <i class="far fa-clock"></i>
-              <span class="duration-text">Loading...</span>
-            </span>
+      <div class="recording-card-main">
+        <div class="recording-info">
+          <div class="recording-icon">
+            <i class="fas fa-microphone"></i>
+          </div>
+          <div class="recording-details">
+            <div class="recording-name">${fileName}</div>
+            <div class="recording-meta">
+              <span class="duration" id="duration-${recordingId}">
+                <i class="far fa-clock"></i>
+                <span class="duration-text">Loading...</span>
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="audio-player">
-        <audio id="audio-${recordingId}" preload="metadata">
-          <source src="${recording.data}" type="audio/webm">
-        </audio>
-        <div class="player-controls">
-          <button class="play-btn" data-key="${key}" data-audio-id="audio-${recordingId}">
-            <span class="play-icon">
-              <i class="fas fa-play"></i>
-            </span>
-            <span class="pause-icon" style="display: none;">
-              <i class="fas fa-pause"></i>
-            </span>
+        <div class="audio-player">
+          <audio id="audio-${recordingId}" preload="metadata">
+            <source src="${recording.data}" type="audio/webm">
+          </audio>
+          <div class="player-controls">
+            <button class="play-btn" data-key="${key}" data-audio-id="audio-${recordingId}">
+              <span class="play-icon">
+                <i class="fas fa-play"></i>
+              </span>
+              <span class="pause-icon" style="display: none;">
+                <i class="fas fa-pause"></i>
+              </span>
+            </button>
+            <div class="progress-container">
+              <div class="progress-bar">
+                <div class="progress-fill" id="progress-${recordingId}"></div>
+              </div>
+              <div class="time-display">
+                <span id="current-time-${recordingId}">0:00</span>
+                <span id="total-time-${recordingId}">0:00</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="action-btn transcribe-btn" data-key="${key}" data-recording-id="${recordingId}" title="Transcribe">
+            <i class="fas fa-file-alt"></i>
           </button>
-          <div class="progress-container">
-            <div class="progress-bar">
-              <div class="progress-fill" id="progress-${recordingId}"></div>
-            </div>
-            <div class="time-display">
-              <span id="current-time-${recordingId}">0:00</span>
-              <span id="total-time-${recordingId}">0:00</span>
-            </div>
-          </div>
+          <button class="action-btn download-btn" data-key="${key}" title="Download">
+            <i class="fas fa-download"></i>
+          </button>
+          <button class="action-btn delete-btn" data-key="${key}" title="Delete">
+            <i class="fas fa-trash"></i>
+          </button>
         </div>
       </div>
-      <div class="actions">
-        <button class="action-btn download-btn" data-key="${key}" title="Download">
-          <i class="fas fa-download"></i>
-        </button>
-        <button class="action-btn delete-btn" data-key="${key}" title="Delete">
-          <i class="fas fa-trash"></i>
-        </button>
+      <div class="transcription-section" id="transcription-${recordingId}" style="display: none;">
+        <div class="transcription-header">
+          <h3>
+            <i class="fas fa-align-left"></i>
+            Transcription
+          </h3>
+          <div class="transcription-status" id="transcription-status-${recordingId}">
+            <span class="status-badge status-transcribing">
+              <i class="fas fa-spinner fa-spin"></i>
+              Transcribing...
+            </span>
+          </div>
+        </div>
+        <div class="transcription-content" id="transcription-content-${recordingId}">
+          <div class="transcription-placeholder">
+            <i class="fas fa-circle-notch fa-spin"></i>
+            <p>Processing audio...</p>
+          </div>
+        </div>
       </div>
     `;
 
@@ -129,11 +154,86 @@ async function loadHistory() {
   }
 }
 
+// Dummy transcription function
+async function transcribeAudio(recordingId) {
+  const transcriptionSection = document.getElementById(`transcription-${recordingId}`);
+  const transcriptionStatus = document.getElementById(`transcription-status-${recordingId}`);
+  const transcriptionContent = document.getElementById(`transcription-content-${recordingId}`);
+
+  // Show transcription section with loading state
+  transcriptionSection.style.display = 'block';
+
+  // Simulate transcription delay
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  // Dummy transcription text
+  const dummyTranscription = `This is a sample transcription of your audio recording. In a real implementation, this would contain the actual transcribed text from your audio file.
+
+The transcription service would process the audio and convert speech to text. This feature could integrate with services like:
+- Google Speech-to-Text
+- Azure Speech Services
+- Amazon Transcribe
+- OpenAI Whisper
+
+For now, this is just a placeholder to demonstrate the UI and workflow. The transcription would appear here once the audio processing is complete.`;
+
+  // Update status to completed
+  transcriptionStatus.innerHTML = `
+    <span class="status-badge status-completed">
+      <i class="fas fa-check-circle"></i>
+      Completed
+    </span>
+  `;
+
+  // Show transcription text
+  transcriptionContent.innerHTML = `
+    <div class="transcription-text">${dummyTranscription}</div>
+    <div class="transcription-actions">
+      <button class="transcription-copy-btn" data-recording-id="${recordingId}">
+        <i class="fas fa-copy"></i>
+        Copy
+      </button>
+    </div>
+  `;
+}
+
 historyList.addEventListener("click", async (e) => {
   const target = e.target.closest('button');
   if (!target) return;
 
-  if (target.classList.contains("play-btn")) {
+  if (target.classList.contains("transcribe-btn")) {
+    const recordingId = target.dataset.recordingId;
+    const transcriptionSection = document.getElementById(`transcription-${recordingId}`);
+
+    // Toggle transcription section
+    if (transcriptionSection.style.display === 'block') {
+      transcriptionSection.style.display = 'none';
+    } else {
+      // Check if already transcribed
+      const transcriptionContent = document.getElementById(`transcription-content-${recordingId}`);
+      if (transcriptionContent.querySelector('.transcription-text')) {
+        // Already transcribed, just show it
+        transcriptionSection.style.display = 'block';
+      } else {
+        // Start transcription
+        await transcribeAudio(recordingId);
+      }
+    }
+  } else if (target.classList.contains("transcription-copy-btn")) {
+    const recordingId = target.dataset.recordingId;
+    const transcriptionText = document.querySelector(`#transcription-content-${recordingId} .transcription-text`);
+
+    if (transcriptionText) {
+      navigator.clipboard.writeText(transcriptionText.textContent);
+
+      // Show feedback
+      const originalHTML = target.innerHTML;
+      target.innerHTML = '<i class="fas fa-check"></i> Copied!';
+      setTimeout(() => {
+        target.innerHTML = originalHTML;
+      }, 2000);
+    }
+  } else if (target.classList.contains("play-btn")) {
     const audioId = target.dataset.audioId;
     const audioElement = document.getElementById(audioId);
     const playIcon = target.querySelector('.play-icon');

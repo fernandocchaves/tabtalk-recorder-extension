@@ -72,8 +72,15 @@ body {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   transition: transform 0.2s, box-shadow 0.2s;
   display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.recording-card-main {
+  display: flex;
   align-items: center;
   gap: 20px;
+  width: 100%;
 }
 
 .recording-card:hover {
@@ -267,6 +274,154 @@ body {
 
 .action-btn:active {
   transform: scale(0.95);
+}
+
+.transcribe-btn:hover {
+  background: #f3e5f5;
+  color: #7b1fa2;
+  border-color: #7b1fa2;
+}
+
+/* Transcription Section */
+.transcription-section {
+  margin-top: 16px;
+  padding: 20px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  border-left: 4px solid #7b1fa2;
+  animation: slideDown 0.3s ease-out;
+}
+
+.transcription-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.transcription-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.transcription-header h3 i {
+  color: #7b1fa2;
+}
+
+.transcription-status {
+  display: flex;
+  align-items: center;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-transcribing {
+  background: #fff3e0;
+  color: #ef6c00;
+}
+
+.status-transcribing i {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-completed {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.transcription-content {
+  min-height: 100px;
+}
+
+.transcription-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: #999;
+}
+
+.transcription-placeholder i {
+  font-size: 32px;
+  margin-bottom: 12px;
+  animation: spin 1s linear infinite;
+}
+
+.transcription-placeholder p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.transcription-text {
+  background: white;
+  padding: 16px;
+  border-radius: 6px;
+  line-height: 1.6;
+  color: #333;
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.transcription-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.transcription-copy-btn {
+  padding: 8px 16px;
+  background: #7b1fa2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.transcription-copy-btn:hover {
+  background: #6a1b9a;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(123, 31, 162, 0.3);
+}
+
+.transcription-copy-btn:active {
+  transform: translateY(0);
+}
+
+.transcription-copy-btn i {
+  font-size: 12px;
 }
 
 /* Responsive design */
