@@ -1,56 +1,25 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="UTF-8">
     <title>Recording History</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        padding: 20px;
-        background-color: #f5f5f5;
-      }
-      .container {
-        background: white;
-        padding: 20px;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        max-width: 800px;
-        margin: 0 auto;
-      }
-      h1 {
-        text-align: center;
-      }
-      ul {
-        list-style: none;
-        padding: 0;
-      }
-      li {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px;
-        border-bottom: 1px solid #ddd;
-      }
-      .actions button {
-        margin-left: 10px;
-        padding: 5px 10px;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-      }
-      .download-btn {
-        background-color: #4285f4;
-        color: white;
-      }
-      .delete-btn {
-        background-color: #f44336;
-        color: white;
-      }
-    </style>
+    <link rel="stylesheet" href="fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="history.css">
   </head>
   <body>
     <div class="container">
-      <h1>Recording History</h1>
-      <ul id="historyList"></ul>
+      <div class="header">
+        <h1><i class="fas fa-music"></i> Recording History</h1>
+        <p class="subtitle">Manage and play your audio recordings</p>
+      </div>
+      <div id="emptyState" class="empty-state" style="display: none;">
+        <div class="empty-icon">
+          <i class="fas fa-microphone"></i>
+        </div>
+        <h2>No Recordings Yet</h2>
+        <p>Start recording to see your audio files here</p>
+      </div>
+      <div id="historyList" class="history-list"></div>
     </div>
     <script src="history.js"></script>
   </body>
