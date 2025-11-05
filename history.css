@@ -17,9 +17,16 @@ body {
 }
 
 .header {
-  text-align: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 40px;
   color: white;
+}
+
+.header-content {
+  text-align: center;
+  flex: 1;
 }
 
 .header h1 {
@@ -490,4 +497,22 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.5);
+}
+.settings-link {
+  color: white;
+  font-size: 24px;
+  border: none;
+  transition: all 0.2s;
+  padding: 10px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+}
+
+.settings-link:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: rotate(45deg);
 }

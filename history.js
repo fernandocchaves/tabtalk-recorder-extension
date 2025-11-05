@@ -353,4 +353,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     console.error('TranscriptionServiceFactory not found');
   }
+
+  // Settings button
+  const settingsButton = document.getElementById('settingsButton');
+  if (settingsButton) {
+    settingsButton.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    });
+  }
 });

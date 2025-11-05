@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Settings - Chrome Audio Recorder</title>
+    <link rel="stylesheet" href="fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="settings.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1><i class="fas fa-cog"></i> Settings</h1>
+        <p class="subtitle">Configure your audio recorder preferences</p>
+      </div>
+
+      <!-- Transcription Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <i class="fas fa-language"></i>
+          <h2>Transcription</h2>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="apiKey">Google Gemini API Key</label>
+            <p class="setting-description">
+              Get your free API key from
+              <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>
+              <br>
+              <small>Free tier: 15 requests/min, 1500 requests/day</small>
+            </p>
+          </div>
+          <div class="setting-control">
+            <div class="api-key-input">
+              <input
+                type="password"
+                id="apiKey"
+                placeholder="AIza..."
+                autocomplete="off"
+              >
+              <button id="toggleApiKey" class="icon-button" title="Show/Hide">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+            <div class="button-group">
+              <button id="saveApiKey" class="btn btn-primary">
+                <i class="fas fa-save"></i> Save Key
+              </button>
+              <button id="clearApiKey" class="btn btn-secondary">
+                <i class="fas fa-trash"></i> Clear
+              </button>
+              <button id="testApiKey" class="btn btn-secondary">
+                <i class="fas fa-vial"></i> Test
+              </button>
+            </div>
+            <div id="apiKeyStatus" class="status-message"></div>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="modelSelect">Transcription Model</label>
+            <p class="setting-description">
+              Choose the AI model for transcription
+            </p>
+          </div>
+          <div class="setting-control">
+            <select id="modelSelect" class="select-input">
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash - Balanced</option>
+              <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite - Fastest</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro - Most Accurate</option>
+            </select>
+            <div class="model-info">
+              <div id="modelDescription" class="model-description"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="autoTranscribe">Auto Transcribe</label>
+            <p class="setting-description">
+              Automatically transcribe recordings after they're saved
+            </p>
+          </div>
+          <div class="setting-control">
+            <label class="toggle-switch">
+              <input type="checkbox" id="autoTranscribe">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Audio Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <i class="fas fa-volume-up"></i>
+          <h2>Audio</h2>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="tabGain">Tab Audio Volume</label>
+            <p class="setting-description">
+              Adjust the volume of audio from browser tabs
+            </p>
+          </div>
+          <div class="setting-control">
+            <div class="slider-container">
+              <input type="range" id="tabGain" min="0" max="2" step="0.1" value="1.0">
+              <span id="tabGainValue" class="slider-value">1.0x</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="micGain">Microphone Volume</label>
+            <p class="setting-description">
+              Adjust the volume of your microphone input
+            </p>
+          </div>
+          <div class="setting-control">
+            <div class="slider-container">
+              <input type="range" id="micGain" min="0" max="3" step="0.1" value="1.5">
+              <span id="micGainValue" class="slider-value">1.5x</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Storage Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <i class="fas fa-database"></i>
+          <h2>Storage</h2>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>Storage Usage</label>
+            <p class="setting-description">
+              Current storage usage for recordings
+            </p>
+          </div>
+          <div class="setting-control">
+            <div class="storage-info">
+              <div class="storage-bar">
+                <div id="storageProgress" class="storage-progress"></div>
+              </div>
+              <div class="storage-text">
+                <span id="storageUsed">0 MB</span> / <span id="storageTotal">10 MB</span>
+                (<span id="storagePercent">0</span>%)
+              </div>
+              <div class="storage-details">
+                <span id="recordingCount">0</span> recordings
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="maxRecordings">Maximum Recordings</label>
+            <p class="setting-description">
+              Automatically delete oldest recordings when limit is reached
+            </p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="maxRecordings" min="5" max="100" value="50">
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>Clear All Data</label>
+            <p class="setting-description">
+              Delete all recordings and reset settings
+            </p>
+          </div>
+          <div class="setting-control">
+            <button id="clearAllData" class="btn btn-danger">
+              <i class="fas fa-exclamation-triangle"></i> Clear All Data
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- UI Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <i class="fas fa-palette"></i>
+          <h2>Interface</h2>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="showNotifications">Show Notifications</label>
+            <p class="setting-description">
+              Display success and error notifications
+            </p>
+          </div>
+          <div class="setting-control">
+            <label class="toggle-switch">
+              <input type="checkbox" id="showNotifications" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="settings-actions">
+        <button id="saveSettings" class="btn btn-primary btn-large">
+          <i class="fas fa-save"></i> Save All Settings
+        </button>
+        <button id="resetSettings" class="btn btn-secondary">
+          <i class="fas fa-undo"></i> Reset to Defaults
+        </button>
+        <button id="exportSettings" class="btn btn-secondary">
+          <i class="fas fa-download"></i> Export Settings
+        </button>
+        <button id="importSettings" class="btn btn-secondary">
+          <i class="fas fa-upload"></i> Import Settings
+        </button>
+      </div>
+
+      <!-- Footer -->
+      <div class="settings-footer">
+        <p>
+          <button id="closeTab" class="link-button">← Close Settings</button> |
+          <button id="openHistory" class="link-button">View History</button>
+        </p>
+        <p class="version">Version 2.0.0</p>
+      </div>
+    </div>
+
+    <!-- Hidden file input for import -->
+    <input type="file" id="importFile" accept=".json" style="display: none;">
+
+    <script src="utils/constants.js"></script>
+    <script src="utils/config.js"></script>
+    <script src="utils/storage.js"></script>
+    <script src="utils/formatters.js"></script>
+    <script src="settings.js"></script>
+  </body>
+</html>

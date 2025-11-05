@@ -10,6 +10,7 @@
     "default_icon": "icons/not-recording.png",
     "default_popup": "popup.html"
   },
+  "options_page": "settings.html",
   "background": {
     "service_worker": "service-worker.js"
   },

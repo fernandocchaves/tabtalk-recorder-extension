@@ -315,13 +315,35 @@ body {
   padding: 15px 20px;
   background: #f9f9f9;
   border-top: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.settings-link {
+  color: #666;
+  font-size: 18px;
+  background: transparent;
+  border: none;
+  transition: all 0.2s;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  cursor: pointer;
+}
+
+.settings-link:hover {
+  color: #667eea;
+  background: #f0f0f0;
+  transform: rotate(45deg);
 }
 
 .status-dot {

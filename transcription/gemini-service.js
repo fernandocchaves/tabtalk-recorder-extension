@@ -5,6 +5,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
   constructor() {
     super();
     this.apiKey = null;
+    this.model = "gemini-2.5-flash"; // Default model
   }
 
   getInfo() {
@@ -24,9 +25,10 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     try {
       if (onProgress) onProgress('Checking Gemini API configuration...');
 
-      // Try to load API key from storage
-      const result = await chrome.storage.local.get('gemini_api_key');
+      // Try to load API key and model from storage
+      const result = await chrome.storage.local.get(['gemini_api_key', 'gemini_model']);
       this.apiKey = result.gemini_api_key;
+      this.model = result.gemini_model || "gemini-2.5-flash";
 
       if (!this.apiKey) {
         // Prompt user for API key
@@ -70,9 +72,9 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       if (onProgress) onProgress('Sending to Gemini...');
 
-      // Use Gemini's multimodal API with audio
+      // Use Gemini's multimodal API with audio (use configured model)
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
         {
           method: 'POST',
           headers: {

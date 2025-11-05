@@ -44,18 +44,31 @@ A powerful Chrome extension that simultaneously records tab audio and microphone
 5. Click "Stop Recording" when finished
 6. Recording is automatically saved to history
 
-### Transcription Setup (2 minutes)
+### Settings Configuration
 
-1. **Get FREE Gemini API Key**
-   - Visit: https://aistudio.google.com/app/apikey
-   - Click "Create API key" (no credit card required)
-   - Copy the key
+Access settings by:
+- Clicking the gear icon in the popup or history page
+- Or right-click extension icon → Options
 
-2. **Start Transcribing**
-   - Click "View History" in the popup
-   - Click the transcription button (document icon) on any recording
-   - Paste your API key when prompted (saved automatically)
-   - View transcription results in seconds
+**Configure:**
+1. **API Key** - Add your Google Gemini API key
+   - Get FREE key: https://aistudio.google.com/app/apikey
+   - Test key validity with built-in tester
+2. **Model Selection** - Choose transcription model:
+   - gemini 2.5 Flash - Balanced
+   - Gemini 2.5 Flash-lite - Fastest
+   - Gemini 2.5 Pro - Most Accurate
+3. **Audio Settings** - Adjust volume levels for tab and microphone
+4. **Storage Management** - View usage, set limits, clear data
+5. **Preferences** - Auto-transcribe, notifications, etc.
+
+### Quick Transcription Setup
+
+1. Open Settings (gear icon)
+2. Enter your Gemini API key
+3. Choose your preferred model
+4. Save settings
+5. Start transcribing!
 
 ## Technical Details
 

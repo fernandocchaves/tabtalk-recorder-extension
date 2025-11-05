@@ -180,6 +180,12 @@ historyButton.addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
 });
 
+// Settings button
+const settingsButton = document.getElementById("settingsButton");
+settingsButton.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
+
 // Listen for messages from offscreen document and service worker
 chrome.runtime.onMessage.addListener((message) => {
   if (message.target === "popup") {
