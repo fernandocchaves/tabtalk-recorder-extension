@@ -56,19 +56,25 @@ async function loadHistory() {
     const hasTranscription = recording.transcription ? 'has-transcription' : '';
     const transcribeTitle = recording.transcription ? 'View Transcription' : 'Transcribe';
 
+    // Check if this is an uploaded file
+    const isUploaded = recording.source === 'upload';
+    const displayName = isUploaded && recording.filename ? recording.filename : fileName;
+    const iconClass = isUploaded ? 'fa-file-audio' : 'fa-microphone';
+
     recordingCard.innerHTML = `
       <div class="recording-card-main">
         <div class="recording-info">
-          <div class="recording-icon">
-            <i class="fas fa-microphone"></i>
+          <div class="recording-icon ${isUploaded ? 'uploaded-icon' : ''}">
+            <i class="fas ${iconClass}"></i>
           </div>
           <div class="recording-details">
-            <div class="recording-name">${fileName}</div>
+            <div class="recording-name">${displayName}</div>
             <div class="recording-meta">
               <span class="duration" id="duration-${recordingId}">
                 <i class="far fa-clock"></i>
                 <span class="duration-text">Loading...</span>
               </span>
+              ${isUploaded ? '<span class="upload-badge"><i class="fas fa-upload"></i> Uploaded</span>' : ''}
               ${recording.transcription ? '<span class="transcription-badge"><i class="fas fa-check-circle"></i> Transcribed</span>' : ''}
             </div>
           </div>
@@ -396,6 +402,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // API Key Modal handlers
   setupApiKeyModal();
+
+  // File upload handlers
+  setupFileUpload();
 });
 
 // API Key Modal functions
@@ -507,3 +516,267 @@ function closeApiKeyModal() {
   const modal = document.getElementById('apiKeyModal');
   modal.style.display = 'none';
 }
+
+// File Upload Functionality
+function setupFileUpload() {
+  const uploadButton = document.getElementById('uploadButton');
+  const emptyUploadButton = document.getElementById('emptyUploadButton');
+  const fileInput = document.getElementById('fileInput');
+  const dropZone = document.getElementById('dropZone');
+
+  // Upload button click
+  if (uploadButton) {
+    uploadButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+  }
+
+  // Empty state upload button
+  if (emptyUploadButton) {
+    emptyUploadButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+  }
+
+  // File input change
+  fileInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    await handleFiles(files);
+    fileInput.value = ''; // Reset input
+  });
+
+  // Drag and drop on entire page
+  document.body.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Only show drop zone if dragging files
+    if (e.dataTransfer.types.includes('Files')) {
+      dropZone.style.display = 'block';
+    }
+  });
+
+  document.body.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  document.body.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Hide drop zone only if leaving the body
+    if (e.target === document.body) {
+      dropZone.style.display = 'none';
+      dropZone.classList.remove('drag-over');
+    }
+  });
+
+  document.body.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.style.display = 'none';
+    dropZone.classList.remove('drag-over');
+  });
+
+  // Drop zone specific events
+  if (dropZone) {
+    dropZone.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+
+      const files = Array.from(e.dataTransfer.files);
+
+      if (files.length > 0) {
+        await handleFiles(files);
+      } else {
+        alert('Please drop audio files only');
+      }
+
+      dropZone.style.display = 'none';
+    });
+  }
+}
+
+// Check if file is an audio file
+function isAudioFile(file) {
+  // Check MIME type
+  if (file.type.startsWith('audio/')) {
+    return true;
+  }
+
+  // WEBM files might be detected as video/webm, check extension too
+  const extension = file.name.split('.').pop().toLowerCase();
+  const audioExtensions = ['mp3', 'wav', 'ogg', 'webm', 'm4a', 'aac', 'flac', 'opus'];
+
+  return audioExtensions.includes(extension);
+}
+
+// Handle uploaded files
+async function handleFiles(files) {
+  if (files.length === 0) return;
+
+  // Filter for audio files
+  const audioFiles = files.filter(file => isAudioFile(file));
+
+  if (audioFiles.length === 0) {
+    alert('No audio files found. Please select audio files (MP3, WAV, OGG, WEBM, M4A).');
+    return;
+  }
+
+  if (audioFiles.length !== files.length) {
+    alert(`${files.length - audioFiles.length} non-audio file(s) skipped.`);
+  }
+
+  // Show loading indicator
+  showNotification('info', `Uploading ${audioFiles.length} file(s)...`);
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const file of audioFiles) {
+    try {
+      await uploadAudioFile(file);
+      successCount++;
+    } catch (error) {
+      console.error('Failed to upload file:', file.name, error);
+      errorCount++;
+    }
+  }
+
+  // Reload history to show new files
+  await loadHistory();
+
+  // Show result
+  if (errorCount === 0) {
+    showNotification('success', `Successfully uploaded ${successCount} file(s)!`);
+  } else {
+    showNotification('warning', `Uploaded ${successCount} file(s), ${errorCount} failed.`);
+  }
+}
+
+// Upload a single audio file
+async function uploadAudioFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = async (e) => {
+      try {
+        const audioDataUrl = e.target.result;
+
+        // Get audio duration
+        const audio = new Audio(audioDataUrl);
+        await new Promise((res) => {
+          audio.addEventListener('loadedmetadata', res);
+        });
+
+        // Create recording object
+        const recording = {
+          data: audioDataUrl,
+          duration: audio.duration,
+          timestamp: Date.now(),
+          filename: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+          source: 'upload' // Mark as uploaded
+        };
+
+        // Save to storage
+        const key = `recording-${recording.timestamp}`;
+        await chrome.storage.local.set({ [key]: recording });
+
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => {
+      reject(new Error('Failed to read file'));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+// Show notification
+function showNotification(type, message) {
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 16px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    z-index: 10000;
+    animation: slideInRight 0.3s ease-out;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    max-width: 400px;
+  `;
+
+  const colors = {
+    success: { bg: '#d4edda', color: '#155724', border: '#c3e6cb' },
+    error: { bg: '#f8d7da', color: '#721c24', border: '#f5c6cb' },
+    info: { bg: '#d1ecf1', color: '#0c5460', border: '#bee5eb' },
+    warning: { bg: '#fff3cd', color: '#856404', border: '#ffeaa7' }
+  };
+
+  const style = colors[type] || colors.info;
+  notification.style.background = style.bg;
+  notification.style.color = style.color;
+  notification.style.border = `1px solid ${style.border}`;
+
+  notification.textContent = message;
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.style.animation = 'slideOutRight 0.3s ease-out';
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
+// Add slide animations
+const uploadStyles = document.createElement('style');
+uploadStyles.textContent = `
+  @keyframes slideInRight {
+    from {
+      transform: translateX(400px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideOutRight {
+    from {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(400px);
+      opacity: 0;
+    }
+  }
+`;
+document.head.appendChild(uploadStyles);

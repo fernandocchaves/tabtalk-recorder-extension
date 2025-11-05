@@ -74,19 +74,41 @@
           <h1><i class="fas fa-music"></i> Recording History</h1>
           <p class="subtitle">Manage and play your audio recordings</p>
         </div>
-        <button id="settingsButton" class="settings-link" title="Settings">
-          <i class="fas fa-cog"></i>
-        </button>
+        <div class="header-actions">
+          <button id="uploadButton" class="upload-button" title="Upload Audio">
+            <i class="fas fa-plus"></i> Add Audio
+          </button>
+          <button id="settingsButton" class="settings-link" title="Settings">
+            <i class="fas fa-cog"></i>
+          </button>
+        </div>
       </div>
+
+      <!-- Drag and Drop Zone -->
+      <div id="dropZone" class="drop-zone" style="display: none;">
+        <div class="drop-zone-content">
+          <i class="fas fa-cloud-upload-alt"></i>
+          <h3>Drop audio files here</h3>
+          <p>or click to browse</p>
+          <p class="drop-zone-formats">Supported: MP3, WAV, OGG, WEBM, M4A</p>
+        </div>
+      </div>
+
       <div id="emptyState" class="empty-state" style="display: none;">
         <div class="empty-icon">
           <i class="fas fa-microphone"></i>
         </div>
         <h2>No Recordings Yet</h2>
-        <p>Start recording to see your audio files here</p>
+        <p>Start recording or upload audio files to see them here</p>
+        <button id="emptyUploadButton" class="empty-upload-button">
+          <i class="fas fa-plus"></i> Upload Audio Files
+        </button>
       </div>
       <div id="historyList" class="history-list"></div>
     </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="fileInput" accept="audio/*" multiple style="display: none;">
     <script src="history.js"></script>
   </body>
 </html>
