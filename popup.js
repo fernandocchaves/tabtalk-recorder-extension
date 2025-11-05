@@ -177,7 +177,7 @@ stopButton.addEventListener("click", () => {
 });
 
 historyButton.addEventListener("click", () => {
-  chrome.tabs.create({ url: "history.html" });
+  chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
 });
 
 // Listen for messages from offscreen document and service worker

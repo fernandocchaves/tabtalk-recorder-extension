@@ -1,0 +1,31 @@
+# Whisper WASM files (too large for git)
+whisper-wasm/
+*.bin
+*.wasm
+
+# Node modules (if any)
+node_modules/
+
+# Build artifacts
+*.o
+*.a
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary whisper.cpp clone (if using scripts)
+whisper.cpp/
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*~

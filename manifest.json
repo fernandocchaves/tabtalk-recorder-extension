@@ -13,9 +13,18 @@
   },
   "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
   "host_permissions": ["*://*/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com;"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["permission.html", "offscreen.html", "history.html"],
+      "resources": [
+        "permission.html",
+        "offscreen.html",
+        "whisper-wasm/*.js",
+        "whisper-wasm/*.wasm",
+        "whisper-wasm/*.bin"
+      ],
       "matches": ["<all_urls>"]
     }
   ]
