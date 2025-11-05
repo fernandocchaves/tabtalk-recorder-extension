@@ -393,4 +393,117 @@ document.addEventListener("DOMContentLoaded", async () => {
       chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
     });
   }
+
+  // API Key Modal handlers
+  setupApiKeyModal();
 });
+
+// API Key Modal functions
+function setupApiKeyModal() {
+  const modal = document.getElementById('apiKeyModal');
+  const input = document.getElementById('modalApiKeyInput');
+  const toggleBtn = document.getElementById('modalToggleApiKey');
+  const saveBtn = document.getElementById('modalSaveBtn');
+  const cancelBtn = document.getElementById('modalCancelBtn');
+
+  // Toggle password visibility
+  toggleBtn.addEventListener('click', () => {
+    const icon = toggleBtn.querySelector('i');
+    if (input.type === 'password') {
+      input.type = 'text';
+      icon.classList.remove('fa-eye');
+      icon.classList.add('fa-eye-slash');
+    } else {
+      input.type = 'password';
+      icon.classList.remove('fa-eye-slash');
+      icon.classList.add('fa-eye');
+    }
+  });
+
+  // Save button
+  saveBtn.addEventListener('click', async () => {
+    const apiKey = input.value.trim();
+
+    if (!apiKey) {
+      alert('Please enter an API key');
+      return;
+    }
+
+    if (!apiKey.startsWith('AIza')) {
+      alert('Invalid API key format. Should start with "AIza"');
+      return;
+    }
+
+    try {
+      // Save to storage
+      await chrome.storage.local.set({ gemini_api_key: apiKey });
+
+      // Resolve the promise that's waiting for the API key
+      if (window.apiKeyModalResolve) {
+        window.apiKeyModalResolve(apiKey);
+        window.apiKeyModalResolve = null;
+      }
+
+      // Close modal
+      closeApiKeyModal();
+    } catch (error) {
+      console.error('Failed to save API key:', error);
+      alert('Failed to save API key');
+    }
+  });
+
+  // Cancel button
+  cancelBtn.addEventListener('click', () => {
+    if (window.apiKeyModalResolve) {
+      window.apiKeyModalResolve(null);
+      window.apiKeyModalResolve = null;
+    }
+    closeApiKeyModal();
+  });
+
+  // Close on backdrop click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      if (window.apiKeyModalResolve) {
+        window.apiKeyModalResolve(null);
+        window.apiKeyModalResolve = null;
+      }
+      closeApiKeyModal();
+    }
+  });
+
+  // Handle Enter key
+  input.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      saveBtn.click();
+    }
+  });
+}
+
+function showApiKeyModal() {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('apiKeyModal');
+    const input = document.getElementById('modalApiKeyInput');
+
+    // Store the resolve function globally so button handlers can access it
+    window.apiKeyModalResolve = resolve;
+
+    // Clear previous input
+    input.value = '';
+    input.type = 'password';
+
+    // Show modal
+    modal.style.display = 'flex';
+
+    // Focus input after animation
+    setTimeout(() => input.focus(), 300);
+  });
+}
+
+// Expose globally for gemini-service.js
+window.showApiKeyModal = showApiKeyModal;
+
+function closeApiKeyModal() {
+  const modal = document.getElementById('apiKeyModal');
+  modal.style.display = 'none';
+}

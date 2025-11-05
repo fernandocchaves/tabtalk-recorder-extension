@@ -10,6 +10,64 @@
     <script src="transcription/base-service.js"></script>
     <script src="transcription/gemini-service.js"></script>
     <script src="transcription/service-factory.js"></script>
+    <!-- API Key Modal -->
+    <div id="apiKeyModal" class="modal-overlay" style="display: none;">
+      <div class="modal-container">
+        <div class="modal-header">
+          <h2><i class="fas fa-key"></i> Enter Gemini API Key</h2>
+          <p class="modal-subtitle">Required for transcription</p>
+        </div>
+        <div class="modal-body">
+          <p class="modal-description">
+            Get your free API key from Google AI Studio to enable transcription features.
+          </p>
+          <div class="modal-steps">
+            <div class="step">
+              <span class="step-number">1</span>
+              <span class="step-text">Visit <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a></span>
+            </div>
+            <div class="step">
+              <span class="step-number">2</span>
+              <span class="step-text">Click "Create API key"</span>
+            </div>
+            <div class="step">
+              <span class="step-number">3</span>
+              <span class="step-text">Paste your API key below</span>
+            </div>
+          </div>
+          <div class="modal-info-box">
+            <i class="fas fa-gift"></i>
+            <div>
+              <strong>Free Tier Included</strong><br>
+              15 requests/minute • 1500 requests/day • No credit card required
+            </div>
+          </div>
+          <div class="modal-input-group">
+            <label for="modalApiKeyInput">API Key</label>
+            <div class="modal-api-key-input">
+              <input
+                type="password"
+                id="modalApiKeyInput"
+                placeholder="AIza..."
+                autocomplete="off"
+              >
+              <button id="modalToggleApiKey" class="modal-icon-button" title="Show/Hide">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modalCancelBtn" class="modal-btn modal-btn-secondary">
+            <i class="fas fa-times"></i> Cancel
+          </button>
+          <button id="modalSaveBtn" class="modal-btn modal-btn-primary">
+            <i class="fas fa-save"></i> Save & Continue
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="container">
       <div class="header">
         <div class="header-content">

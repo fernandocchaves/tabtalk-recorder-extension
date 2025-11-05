@@ -31,22 +31,29 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       this.model = result.gemini_model || "gemini-2.5-flash";
 
       if (!this.apiKey) {
-        // Prompt user for API key
-        this.apiKey = prompt(
-          'Enter your Google Gemini API key:\n\n' +
-          '1. Go to https://aistudio.google.com/app/apikey\n' +
-          '2. Click "Create API key"\n' +
-          '3. Paste it here (it will be saved)\n\n' +
-          'FREE tier: 15 requests per minute, 1500 per day\n' +
-          'No credit card required!'
-        );
+        // Show custom modal for API key
+        if (typeof window !== 'undefined' && window.showApiKeyModal) {
+          this.apiKey = await window.showApiKeyModal();
+        } else {
+          // Fallback to prompt if modal not available
+          this.apiKey = prompt(
+            'Enter your Google Gemini API key:\n\n' +
+            '1. Go to https://aistudio.google.com/app/apikey\n' +
+            '2. Click "Create API key"\n' +
+            '3. Paste it here (it will be saved)\n\n' +
+            'FREE tier: 15 requests per minute, 1500 per day\n' +
+            'No credit card required!'
+          );
+
+          if (this.apiKey) {
+            // Save API key for future use
+            await chrome.storage.local.set({ gemini_api_key: this.apiKey });
+          }
+        }
 
         if (!this.apiKey) {
           throw new Error('Gemini API key required for transcription');
         }
-
-        // Save API key for future use
-        await chrome.storage.local.set({ gemini_api_key: this.apiKey });
       }
 
       this.isReady = true;
