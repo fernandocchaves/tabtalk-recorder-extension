@@ -1,9 +1,11 @@
 {
-  "name": "Simple Chrome Recorder",
-  "description": "A powerful Chrome extension that simultaneously records tab audio and microphone input with advanced audio processing, including noise suppression, echo cancellation, and customizable gain control. Perfect for creating voiceovers, commentary, and capturing both system audio and voice input.",
-  "version": "1.0",
+  "name": "Chrome Audio Recorder",
+  "description": "Record tab audio and microphone simultaneously with AI transcription. Features noise suppression, echo cancellation, and Google Gemini-powered transcription.",
+  "version": "2.0.0",
   "manifest_version": 3,
   "minimum_chrome_version": "116",
+  "author": "Chrome Audio Recorder Team",
+  "homepage_url": "https://github.com/yourusername/chrome-recorder-extension",
   "action": {
     "default_icon": "icons/not-recording.png",
     "default_popup": "popup.html"
@@ -20,12 +22,13 @@
     {
       "resources": [
         "permission.html",
-        "offscreen.html",
-        "whisper-wasm/*.js",
-        "whisper-wasm/*.wasm",
-        "whisper-wasm/*.bin"
+        "offscreen.html"
       ],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+  "icons": {
+    "48": "icons/not-recording.png",
+    "128": "icons/not-recording.png"
+  }
 }

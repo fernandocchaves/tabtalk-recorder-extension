@@ -154,7 +154,7 @@ async function loadHistory() {
   }
 }
 
-// Real transcription function using Whisper
+// Real transcription function
 async function transcribeAudio(recordingId) {
   const transcriptionSection = document.getElementById(`transcription-${recordingId}`);
   const transcriptionStatus = document.getElementById(`transcription-status-${recordingId}`);
@@ -338,14 +338,19 @@ historyList.addEventListener("click", async (e) => {
 });
 
 // Initialize transcription service
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   loadHistory();
 
-  // Create transcription service instance
-  if (typeof TranscriptionService !== 'undefined') {
-    window.transcriptionService = new TranscriptionService();
-    console.log('Transcription service initialized');
+  // Create transcription service instance using factory
+  if (typeof TranscriptionServiceFactory !== 'undefined') {
+    try {
+      const serviceType = await TranscriptionServiceFactory.getConfiguredService();
+      window.transcriptionService = TranscriptionServiceFactory.create(serviceType);
+      console.log('Transcription service initialized:', serviceType);
+    } catch (error) {
+      console.error('Failed to initialize transcription service:', error);
+    }
   } else {
-    console.error('TranscriptionService class not found');
+    console.error('TranscriptionServiceFactory not found');
   }
 });

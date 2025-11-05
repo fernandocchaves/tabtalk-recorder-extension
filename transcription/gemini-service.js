@@ -1,18 +1,28 @@
 // Transcription service using Google Gemini API
-// Simple, reliable, and accurate transcription
-// Requires a Gemini API key (free tier available!)
+// Simple, reliable, and accurate transcription with FREE tier
 
-class TranscriptionService {
+class GeminiTranscriptionService extends BaseTranscriptionService {
   constructor() {
-    this.isReady = false;
+    super();
     this.apiKey = null;
+  }
+
+  getInfo() {
+    return {
+      name: 'Google Gemini API',
+      requiresApiKey: true,
+      requiresInternet: true,
+      cost: 'FREE tier: 15/min, 1500/day',
+      accuracy: 'Excellent',
+      model: 'Gemini 2.5 Flash'
+    };
   }
 
   async initialize(onProgress) {
     if (this.isReady) return true;
 
     try {
-      if (onProgress) onProgress('Checking API configuration...');
+      if (onProgress) onProgress('Checking Gemini API configuration...');
 
       // Try to load API key from storage
       const result = await chrome.storage.local.get('gemini_api_key');
@@ -25,12 +35,12 @@ class TranscriptionService {
           '1. Go to https://aistudio.google.com/app/apikey\n' +
           '2. Click "Create API key"\n' +
           '3. Paste it here (it will be saved)\n\n' +
-          'FREE tier: 15 requests per minute\n' +
-          'Paid tier available for higher usage'
+          'FREE tier: 15 requests per minute, 1500 per day\n' +
+          'No credit card required!'
         );
 
         if (!this.apiKey) {
-          throw new Error('API key required for transcription');
+          throw new Error('Gemini API key required for transcription');
         }
 
         // Save API key for future use
@@ -38,12 +48,12 @@ class TranscriptionService {
       }
 
       this.isReady = true;
-      if (onProgress) onProgress('Ready');
+      if (onProgress) onProgress('Gemini API ready');
       return true;
 
     } catch (error) {
-      console.error('Failed to initialize transcription service:', error);
-      throw new Error('Failed to initialize: ' + error.message);
+      console.error('Failed to initialize Gemini service:', error);
+      throw new Error('Gemini initialization failed: ' + error.message);
     }
   }
 
@@ -108,39 +118,16 @@ class TranscriptionService {
         throw new Error('No speech detected in audio');
       }
 
-      // Clean up the transcription (remove any extra formatting Gemini might add)
-      let cleanedTranscription = transcription.trim();
-
-      // Remove common prefixes that Gemini might add
-      const prefixes = [
-        'Transcription:',
-        'Here is the transcription:',
-        'The transcription is:',
-        'Audio transcription:',
-      ];
-
-      for (const prefix of prefixes) {
-        if (cleanedTranscription.toLowerCase().startsWith(prefix.toLowerCase())) {
-          cleanedTranscription = cleanedTranscription.substring(prefix.length).trim();
-        }
-      }
-
-      // Remove markdown code blocks if present
-      cleanedTranscription = cleanedTranscription
-        .replace(/^```[\s\S]*?\n/, '')
-        .replace(/\n```$/, '')
-        .trim();
+      // Clean up the transcription
+      let cleanedTranscription = this._cleanTranscription(transcription);
 
       return cleanedTranscription;
 
     } catch (error) {
-      console.error('Transcription error:', error);
+      console.error('Gemini transcription error:', error);
 
       // If API key is invalid, clear it
-      if (error.message.includes('API') ||
-          error.message.includes('Unauthorized') ||
-          error.message.includes('Invalid API key') ||
-          error.message.includes('403')) {
+      if (this._isAuthError(error)) {
         await chrome.storage.local.remove('gemini_api_key');
         this.isReady = false;
         this.apiKey = null;
@@ -148,6 +135,40 @@ class TranscriptionService {
 
       throw new Error('Transcription failed: ' + error.message);
     }
+  }
+
+  _cleanTranscription(text) {
+    let cleaned = text.trim();
+
+    // Remove common prefixes that Gemini might add
+    const prefixes = [
+      'Transcription:',
+      'Here is the transcription:',
+      'The transcription is:',
+      'Audio transcription:',
+    ];
+
+    for (const prefix of prefixes) {
+      if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
+        cleaned = cleaned.substring(prefix.length).trim();
+      }
+    }
+
+    // Remove markdown code blocks if present
+    cleaned = cleaned
+      .replace(/^```[\s\S]*?\n/, '')
+      .replace(/\n```$/, '')
+      .trim();
+
+    return cleaned;
+  }
+
+  _isAuthError(error) {
+    const message = error.message.toLowerCase();
+    return message.includes('api') ||
+           message.includes('unauthorized') ||
+           message.includes('invalid api key') ||
+           message.includes('403');
   }
 
   async clearApiKey() {
@@ -163,5 +184,5 @@ class TranscriptionService {
 
 // Export for use in other scripts
 if (typeof window !== 'undefined') {
-  window.TranscriptionService = TranscriptionService;
+  window.GeminiTranscriptionService = GeminiTranscriptionService;
 }
