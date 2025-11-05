@@ -154,7 +154,7 @@ async function loadHistory() {
   }
 }
 
-// Dummy transcription function
+// Real transcription function using Whisper
 async function transcribeAudio(recordingId) {
   const transcriptionSection = document.getElementById(`transcription-${recordingId}`);
   const transcriptionStatus = document.getElementById(`transcription-status-${recordingId}`);
@@ -163,38 +163,87 @@ async function transcribeAudio(recordingId) {
   // Show transcription section with loading state
   transcriptionSection.style.display = 'block';
 
-  // Simulate transcription delay
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  try {
+    // Get the recording data
+    const key = `recording-${recordingId}`;
+    const result = await chrome.storage.local.get(key);
+    const recording = result[key];
 
-  // Dummy transcription text
-  const dummyTranscription = `This is a sample transcription of your audio recording. In a real implementation, this would contain the actual transcribed text from your audio file.
+    if (!recording || !recording.data) {
+      throw new Error('Recording not found');
+    }
 
-The transcription service would process the audio and convert speech to text. This feature could integrate with services like:
-- Google Speech-to-Text
-- Azure Speech Services
-- Amazon Transcribe
-- OpenAI Whisper
+    // Update status with progress
+    const updateStatus = (message) => {
+      transcriptionStatus.innerHTML = `
+        <span class="status-badge status-transcribing">
+          <i class="fas fa-spinner fa-spin"></i>
+          ${message}
+        </span>
+      `;
+    };
 
-For now, this is just a placeholder to demonstrate the UI and workflow. The transcription would appear here once the audio processing is complete.`;
+    updateStatus('Initializing...');
 
-  // Update status to completed
-  transcriptionStatus.innerHTML = `
-    <span class="status-badge status-completed">
-      <i class="fas fa-check-circle"></i>
-      Completed
-    </span>
-  `;
+    // Wait for transcription service to be available
+    let attempts = 0;
+    while (!window.transcriptionService && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
 
-  // Show transcription text
-  transcriptionContent.innerHTML = `
-    <div class="transcription-text">${dummyTranscription}</div>
-    <div class="transcription-actions">
-      <button class="transcription-copy-btn" data-recording-id="${recordingId}">
-        <i class="fas fa-copy"></i>
-        Copy
-      </button>
-    </div>
-  `;
+    if (!window.transcriptionService) {
+      throw new Error('Transcription service not available');
+    }
+
+    // Transcribe the audio
+    const transcriptionText = await window.transcriptionService.transcribe(
+      recording.data,
+      updateStatus
+    );
+
+    // Update status to completed
+    transcriptionStatus.innerHTML = `
+      <span class="status-badge status-completed">
+        <i class="fas fa-check-circle"></i>
+        Completed
+      </span>
+    `;
+
+    // Show transcription text
+    transcriptionContent.innerHTML = `
+      <div class="transcription-text">${transcriptionText}</div>
+      <div class="transcription-actions">
+        <button class="transcription-copy-btn" data-recording-id="${recordingId}">
+          <i class="fas fa-copy"></i>
+          Copy
+        </button>
+      </div>
+    `;
+
+  } catch (error) {
+    console.error('Transcription error:', error);
+
+    // Show error status
+    transcriptionStatus.innerHTML = `
+      <span class="status-badge" style="background: #ffebee; color: #c62828;">
+        <i class="fas fa-exclamation-circle"></i>
+        Error
+      </span>
+    `;
+
+    transcriptionContent.innerHTML = `
+      <div style="padding: 20px; text-align: center; color: #c62828;">
+        <i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 12px;"></i>
+        <p><strong>Transcription failed</strong></p>
+        <p style="font-size: 13px; margin-top: 8px;">${error.message}</p>
+        <button class="transcription-copy-btn transcription-retry-btn" data-recording-id="${recordingId}" style="margin-top: 12px; background: #f44336;">
+          <i class="fas fa-redo"></i>
+          Retry
+        </button>
+      </div>
+    `;
+  }
 }
 
 historyList.addEventListener("click", async (e) => {
@@ -219,6 +268,13 @@ historyList.addEventListener("click", async (e) => {
         await transcribeAudio(recordingId);
       }
     }
+  } else if (target.classList.contains("transcription-retry-btn")) {
+    const recordingId = target.dataset.recordingId;
+    const transcribeBtn = document.querySelector(`.transcribe-btn[data-recording-id="${recordingId}"]`);
+
+    // Click twice to close and reopen (which triggers retry)
+    transcribeBtn.click();
+    transcribeBtn.click();
   } else if (target.classList.contains("transcription-copy-btn")) {
     const recordingId = target.dataset.recordingId;
     const transcriptionText = document.querySelector(`#transcription-content-${recordingId} .transcription-text`);
@@ -281,4 +337,15 @@ historyList.addEventListener("click", async (e) => {
   }
 });
 
-document.addEventListener("DOMContentLoaded", loadHistory);
+// Initialize transcription service
+document.addEventListener("DOMContentLoaded", () => {
+  loadHistory();
+
+  // Create transcription service instance
+  if (typeof TranscriptionService !== 'undefined') {
+    window.transcriptionService = new TranscriptionService();
+    console.log('Transcription service initialized');
+  } else {
+    console.error('TranscriptionService class not found');
+  }
+});
