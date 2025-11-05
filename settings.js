@@ -120,10 +120,6 @@ async function loadSettings() {
 // Setup event listeners
 function setupEventListeners() {
   // Navigation
-  document.getElementById('closeTab').addEventListener('click', () => {
-    window.close();
-  });
-
   document.getElementById('openHistory').addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
   });

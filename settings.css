@@ -84,7 +84,7 @@ body {
   padding: 24px;
   background: #f8f9fa;
   border-radius: 8px;
-  align-items: start;
+  align-items: center;
 }
 
 .setting-item:last-child {
@@ -123,6 +123,28 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  align-items: flex-start;
+}
+
+/* Toggle switches and buttons should align to the end */
+.setting-control .toggle-switch,
+.setting-control .button-group,
+.setting-control .btn {
+  align-self: flex-end;
+}
+
+/* But keep certain elements full width */
+.setting-control .api-key-input,
+.setting-control .slider-container,
+.setting-control .select-input,
+.setting-control .model-info,
+.setting-control .storage-info,
+.setting-control .status-message,
+.setting-control input[type="text"],
+.setting-control input[type="password"],
+.setting-control input[type="number"] {
+  align-self: stretch;
+  width: 100%;
 }
 
 /* Inputs */
@@ -213,6 +235,7 @@ input[type="number"] {
 .btn-danger {
   background: #e74c3c;
   color: white;
+  width: fit-content;
 }
 
 .btn-danger:hover {

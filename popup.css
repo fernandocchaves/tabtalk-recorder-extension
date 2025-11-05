@@ -333,7 +333,7 @@ body {
   border: none;
   transition: all 0.2s;
   padding: 6px;
-  border-radius: 6px;
+  border-radius: 100px;
   display: flex;
   align-items: center;
   justify-content: center;
