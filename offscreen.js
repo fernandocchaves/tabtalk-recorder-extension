@@ -2,7 +2,7 @@ let recorder;
 let data = [];
 let activeStreams = [];
 
-chrome.runtime.onMessage.addListener(async (message) => {
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.target === "offscreen") {
     switch (message.type) {
       case "start-recording":
@@ -14,8 +14,43 @@ chrome.runtime.onMessage.addListener(async (message) => {
       default:
         throw new Error("Unrecognized message:", message.type);
     }
+  } else if (message.target === "storage-handler") {
+    // Handle IndexedDB operations for service worker
+    handleStorageOperation(message, sendResponse);
+    return true; // Keep message channel open for async response
   }
 });
+
+// Handle storage operations from service worker
+async function handleStorageOperation(message, sendResponse) {
+  try {
+    switch (message.type) {
+      case 'indexeddb-save':
+        const key = await window.StorageUtils.saveRecording(
+          message.data.audioDataUrl,
+          message.data.metadata
+        );
+        sendResponse({ success: true, key });
+        break;
+
+      case 'indexeddb-getall':
+        const recordings = await window.StorageUtils.getAllRecordings();
+        sendResponse({ success: true, recordings });
+        break;
+
+      case 'indexeddb-delete':
+        await window.StorageUtils.deleteRecording(message.data.key);
+        sendResponse({ success: true });
+        break;
+
+      default:
+        sendResponse({ error: 'Unknown storage operation' });
+    }
+  } catch (error) {
+    console.error('Storage operation failed:', error);
+    sendResponse({ error: error.message });
+  }
+}
 
 async function startRecording(streamId) {
   if (recorder?.state === "recording") {

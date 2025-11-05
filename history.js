@@ -27,25 +27,19 @@ function formatDate(timestamp) {
 }
 
 async function loadHistory() {
-  const recordings = await chrome.storage.local.get(null);
+  const recordings = await window.StorageUtils.getAllRecordings();
   historyList.innerHTML = "";
 
-  const recordingKeys = Object.keys(recordings).filter(key => key.startsWith("recording-"));
-
-  if (recordingKeys.length === 0) {
+  if (recordings.length === 0) {
     emptyState.style.display = "block";
     return;
   } else {
     emptyState.style.display = "none";
   }
 
-  // Sort by timestamp (newest first)
-  recordingKeys.sort((a, b) => {
-    return recordings[b].timestamp - recordings[a].timestamp;
-  });
-
-  for (const key of recordingKeys) {
-    const recording = recordings[key];
+  // Recordings are already sorted by timestamp (newest first) from IndexedDB
+  for (const recording of recordings) {
+    const key = recording.key;
     const recordingCard = document.createElement("div");
     recordingCard.className = "recording-card";
 
@@ -177,8 +171,7 @@ async function transcribeAudio(recordingId) {
   try {
     // Get the recording data
     const key = `recording-${recordingId}`;
-    const result = await chrome.storage.local.get(key);
-    const recording = result[key];
+    const recording = await window.StorageUtils.getRecording(key);
 
     if (!recording || !recording.data) {
       throw new Error('Recording not found');
@@ -214,8 +207,7 @@ async function transcribeAudio(recordingId) {
     );
 
     // Save transcription to storage
-    recording.transcription = transcriptionText;
-    await chrome.storage.local.set({ [key]: recording });
+    await window.StorageUtils.updateTranscription(key, transcriptionText);
 
     // Update status to completed
     transcriptionStatus.innerHTML = `
@@ -275,8 +267,7 @@ historyList.addEventListener("click", async (e) => {
     } else {
       // Check if transcription exists in storage
       const key = `recording-${recordingId}`;
-      const result = await chrome.storage.local.get(key);
-      const recording = result[key];
+      const recording = await window.StorageUtils.getRecording(key);
 
       if (recording && recording.transcription) {
         // Load existing transcription from storage
@@ -359,8 +350,7 @@ historyList.addEventListener("click", async (e) => {
     }
   } else if (target.classList.contains("download-btn")) {
     const key = target.dataset.key;
-    const result = await chrome.storage.local.get(key);
-    const recording = result[key];
+    const recording = await window.StorageUtils.getRecording(key);
 
     const downloadLink = document.createElement("a");
     downloadLink.href = recording.data;
@@ -369,7 +359,7 @@ historyList.addEventListener("click", async (e) => {
   } else if (target.classList.contains("delete-btn")) {
     if (confirm('Are you sure you want to delete this recording?')) {
       const key = target.dataset.key;
-      await chrome.storage.local.remove(key);
+      await window.StorageUtils.deleteRecording(key);
       loadHistory();
     }
   }
@@ -377,6 +367,20 @@ historyList.addEventListener("click", async (e) => {
 
 // Initialize transcription service
 document.addEventListener("DOMContentLoaded", async () => {
+  // Run migration on first load
+  const migrationDone = localStorage.getItem('indexeddb_migration_done');
+  if (!migrationDone) {
+    console.log('Running first-time migration to IndexedDB...');
+    try {
+      const result = await window.StorageUtils.migrateFromChromeStorage();
+      console.log('Migration result:', result);
+      localStorage.setItem('indexeddb_migration_done', 'true');
+      showNotification('success', `Migrated ${result.migrated} recording(s) to IndexedDB!`);
+    } catch (error) {
+      console.error('Migration failed:', error);
+    }
+  }
+
   loadHistory();
 
   // Create transcription service instance using factory
@@ -698,9 +702,15 @@ async function uploadAudioFile(file) {
           source: 'upload' // Mark as uploaded
         };
 
-        // Save to storage
-        const key = `recording-${recording.timestamp}`;
-        await chrome.storage.local.set({ [key]: recording });
+        // Save to storage using IndexedDB
+        await window.StorageUtils.saveRecording(audioDataUrl, {
+          duration: audio.duration,
+          timestamp: recording.timestamp,
+          filename: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+          source: 'upload'
+        });
 
         resolve();
       } catch (error) {

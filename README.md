@@ -24,6 +24,7 @@ A powerful Chrome extension that simultaneously records tab audio and microphone
 - **Auto-Organization**: Recordings sorted by date with timestamps
 - **Quick Actions**: Play, download, delete, and transcribe recordings
 - **Beautiful Interface**: Modern design with intuitive controls
+- **Large Storage Capacity**: Uses IndexedDB for unlimited audio storage (no 10MB limit)
 
 ## Installation
 
@@ -76,7 +77,8 @@ Access settings by:
 - **Manifest V3**: Modern Chrome extension APIs
 - **Service Worker**: Manages extension lifecycle and state
 - **Offscreen Document**: Handles audio capture with MediaRecorder API
-- **Chrome Storage**: Stores recordings and settings locally
+- **IndexedDB Storage**: Stores audio recordings and transcriptions (unlimited capacity)
+- **Chrome Storage**: Stores settings and configuration
 - **Web Audio API**: Advanced audio mixing and processing
 
 ### Transcription
@@ -88,15 +90,27 @@ Access settings by:
 ### File Structure
 ```
 chrome-recorder-extension/
-├── manifest.json              # Extension configuration
-├── popup.html/js/css         # Main extension popup
-├── history.html/js/css       # Recording history page
-├── offscreen.html/js         # Audio capture context
-├── service-worker.js         # Background service worker
-├── permission.html/js        # Microphone permission handler
-├── transcription-service-gemini.js  # AI transcription service
-├── icons/                    # Extension icons
-└── fontawesome/             # Icon library
+├── manifest.json                      # Extension configuration
+├── popup.html/js/css                 # Main extension popup
+├── history.html/js/css               # Recording history page
+├── settings.html/js/css              # Settings and configuration
+├── offscreen.html/js                 # Audio capture context
+├── service-worker.js                 # Background service worker
+├── permission.html/js                # Microphone permission handler
+├── utils/
+│   ├── indexeddb.js                  # IndexedDB database manager
+│   ├── storage.js                    # Storage utilities wrapper
+│   ├── storage-handler.js            # Service worker storage bridge
+│   ├── config.js                     # Configuration manager
+│   └── constants.js                  # App constants
+├── transcription/
+│   ├── base-service.js               # Base transcription service
+│   ├── gemini-service.js             # Gemini AI implementation
+│   └── service-factory.js            # Service factory pattern
+├── icons/                            # Extension icons
+├── fontawesome/                      # Icon library
+├── MIGRATION_GUIDE.md                # IndexedDB migration documentation
+└── README.md                         # This file
 ```
 
 ## Permissions Required
@@ -117,8 +131,16 @@ chrome-recorder-extension/
 - Cannot record on Chrome system pages (chrome://, chrome-extension://)
 - Transcription requires internet connection for API calls
 - Free tier has rate limits (15/min, 1500/day)
-- Recordings stored locally consume browser storage quota
 - Microphone permission required for recording
+
+## Storage Migration
+
+This extension now uses **IndexedDB** instead of chrome.storage.local for storing audio recordings. This provides:
+- **Unlimited storage capacity** (vs 10MB limit)
+- **Better performance** for large files
+- **Automatic migration** from old storage on first use
+
+See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for detailed information about the storage migration.
 
 ## Troubleshooting
 

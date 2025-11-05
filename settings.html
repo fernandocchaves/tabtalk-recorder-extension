@@ -139,29 +139,6 @@
 
         <div class="setting-item">
           <div class="setting-label">
-            <label>Storage Usage</label>
-            <p class="setting-description">
-              Current storage usage for recordings
-            </p>
-          </div>
-          <div class="setting-control">
-            <div class="storage-info">
-              <div class="storage-bar">
-                <div id="storageProgress" class="storage-progress"></div>
-              </div>
-              <div class="storage-text">
-                <span id="storageUsed">0 MB</span> / <span id="storageTotal">10 MB</span>
-                (<span id="storagePercent">0</span>%)
-              </div>
-              <div class="storage-details">
-                <span id="recordingCount">0</span> recordings
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-label">
             <label for="maxRecordings">Maximum Recordings</label>
             <p class="setting-description">
               Automatically delete oldest recordings when limit is reached
@@ -240,7 +217,8 @@
 
     <script src="utils/constants.js"></script>
     <script src="utils/config.js"></script>
-    <script src="utils/storage.js"></script>
+    <script type="module" src="utils/indexeddb.js"></script>
+    <script type="module" src="utils/storage.js"></script>
     <script src="utils/formatters.js"></script>
     <script src="settings.js"></script>
   </body>

@@ -56,11 +56,6 @@ const elements = {
   micGainValue: document.getElementById('micGainValue'),
 
   // Storage
-  storageProgress: document.getElementById('storageProgress'),
-  storageUsed: document.getElementById('storageUsed'),
-  storageTotal: document.getElementById('storageTotal'),
-  storagePercent: document.getElementById('storagePercent'),
-  recordingCount: document.getElementById('recordingCount'),
   maxRecordings: document.getElementById('maxRecordings'),
   clearAllData: document.getElementById('clearAllData'),
 
@@ -80,7 +75,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   setupEventListeners();
   updateModelDescription();
-  await updateStorageInfo();
 });
 
 // Load settings from storage
@@ -277,35 +271,6 @@ function updateModelDescription() {
   }
 }
 
-// Update storage info
-async function updateStorageInfo() {
-  try {
-    const recordings = await StorageUtils.getAllRecordings();
-    const storageInfo = await StorageUtils.getStorageInfo();
-
-    const usedMB = (storageInfo.bytesInUse / (1024 * 1024)).toFixed(2);
-    const totalMB = (storageInfo.quota / (1024 * 1024)).toFixed(0);
-    const percent = Math.round(storageInfo.percentUsed);
-
-    elements.storageUsed.textContent = `${usedMB} MB`;
-    elements.storageTotal.textContent = `${totalMB} MB`;
-    elements.storagePercent.textContent = percent;
-    elements.storageProgress.style.width = `${percent}%`;
-    elements.recordingCount.textContent = recordings.length;
-
-    // Change color based on usage
-    if (percent > 80) {
-      elements.storageProgress.style.background = 'linear-gradient(90deg, #e74c3c 0%, #c0392b 100%)';
-    } else if (percent > 60) {
-      elements.storageProgress.style.background = 'linear-gradient(90deg, #f39c12 0%, #e67e22 100%)';
-    } else {
-      elements.storageProgress.style.background = 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)';
-    }
-  } catch (error) {
-    console.error('Failed to get storage info:', error);
-  }
-}
-
 // Save all settings
 async function saveAllSettings() {
   try {
@@ -432,7 +397,6 @@ async function clearAllData() {
 
     // Reload UI
     await loadSettings();
-    await updateStorageInfo();
     elements.apiKey.value = '';
 
     unsavedChanges = false;
