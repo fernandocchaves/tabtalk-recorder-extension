@@ -52,6 +52,10 @@ async function loadHistory() {
     const fileName = formatDate(recording.timestamp);
     const recordingId = key.replace("recording-", "");
 
+    // Check if transcription exists for this recording
+    const hasTranscription = recording.transcription ? 'has-transcription' : '';
+    const transcribeTitle = recording.transcription ? 'View Transcription' : 'Transcribe';
+
     recordingCard.innerHTML = `
       <div class="recording-card-main">
         <div class="recording-info">
@@ -65,6 +69,7 @@ async function loadHistory() {
                 <i class="far fa-clock"></i>
                 <span class="duration-text">Loading...</span>
               </span>
+              ${recording.transcription ? '<span class="transcription-badge"><i class="fas fa-check-circle"></i> Transcribed</span>' : ''}
             </div>
           </div>
         </div>
@@ -93,7 +98,7 @@ async function loadHistory() {
           </div>
         </div>
         <div class="actions">
-          <button class="action-btn transcribe-btn" data-key="${key}" data-recording-id="${recordingId}" title="Transcribe">
+          <button class="action-btn transcribe-btn ${hasTranscription}" data-key="${key}" data-recording-id="${recordingId}" title="${transcribeTitle}">
             <i class="fas fa-file-alt"></i>
           </button>
           <button class="action-btn download-btn" data-key="${key}" title="Download">
@@ -202,6 +207,10 @@ async function transcribeAudio(recordingId) {
       updateStatus
     );
 
+    // Save transcription to storage
+    recording.transcription = transcriptionText;
+    await chrome.storage.local.set({ [key]: recording });
+
     // Update status to completed
     transcriptionStatus.innerHTML = `
       <span class="status-badge status-completed">
@@ -258,13 +267,36 @@ historyList.addEventListener("click", async (e) => {
     if (transcriptionSection.style.display === 'block') {
       transcriptionSection.style.display = 'none';
     } else {
-      // Check if already transcribed
-      const transcriptionContent = document.getElementById(`transcription-content-${recordingId}`);
-      if (transcriptionContent.querySelector('.transcription-text')) {
-        // Already transcribed, just show it
+      // Check if transcription exists in storage
+      const key = `recording-${recordingId}`;
+      const result = await chrome.storage.local.get(key);
+      const recording = result[key];
+
+      if (recording && recording.transcription) {
+        // Load existing transcription from storage
+        const transcriptionStatus = document.getElementById(`transcription-status-${recordingId}`);
+        const transcriptionContent = document.getElementById(`transcription-content-${recordingId}`);
+
+        transcriptionStatus.innerHTML = `
+          <span class="status-badge status-completed">
+            <i class="fas fa-check-circle"></i>
+            Completed
+          </span>
+        `;
+
+        transcriptionContent.innerHTML = `
+          <div class="transcription-text">${recording.transcription}</div>
+          <div class="transcription-actions">
+            <button class="transcription-copy-btn" data-recording-id="${recordingId}">
+              <i class="fas fa-copy"></i>
+              Copy
+            </button>
+          </div>
+        `;
+
         transcriptionSection.style.display = 'block';
       } else {
-        // Start transcription
+        // No existing transcription, start new transcription
         await transcribeAudio(recordingId);
       }
     }
