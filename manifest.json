@@ -1,11 +1,11 @@
 {
-  "name": "Chrome Audio Recorder",
+  "name": "TabTalk Recorder",
   "description": "Record tab audio and microphone simultaneously with AI transcription. Features noise suppression, echo cancellation, and Google Gemini-powered transcription.",
   "version": "2.0.0",
   "manifest_version": 3,
   "minimum_chrome_version": "116",
-  "author": "Chrome Audio Recorder Team",
-  "homepage_url": "https://github.com/yourusername/chrome-recorder-extension",
+  "author": "TabTalk Recorder Team",
+  "homepage_url": "https://github.com/syblock/tabtalk-recorder-extension",
   "action": {
     "default_icon": {
       "16": "icons/not-recording-16.png",

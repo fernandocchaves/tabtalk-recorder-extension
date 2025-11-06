@@ -1,218 +1,112 @@
-# Chrome Audio Recorder Extension
+# TabTalk Recorder
 
-A powerful Chrome extension that simultaneously records tab audio and microphone input with AI-powered transcription capabilities.
+> Record browser tab audio and microphone simultaneously with AI-powered transcription
+
+[![Chrome Web Store](https://img.shields.io/badge/Chrome-Web%20Store-blue?logo=google-chrome)](https://chrome.google.com/webstore)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+## What is TabTalk Recorder?
+
+TabTalk Recorder is a Chrome extension that lets you capture audio from both your browser tabs and microphone at the same time. Get instant AI transcriptions powered by Google Gemini with just one click.
+
+**Key Features:**
+- Dual audio recording (tab + microphone)
+- AI transcription with Google Gemini
+- Unlimited local storage
+- Privacy-focused - all data stays on your device
 
 ## Features
 
-### Recording
-- **Dual Audio Capture**: Records both tab audio and microphone simultaneously
-- **Advanced Audio Processing**: Noise suppression, echo cancellation, automatic gain control
-- **Background Recording**: Continue recording when popup is closed
-- **WebM Format**: High-quality audio recording
-- **Modern UI**: Clean, gradient-based interface with smooth animations
-
-### AI Transcription
-- **Powered by Google Gemini API**
-- **FREE Tier Available**: 15 requests/min, 1500 requests/day
-- **Excellent Accuracy**: Uses Gemini 2.5 Flash model
-- **Fast Processing**: Transcription completes in seconds
-- **Easy to Use**: One-click transcription with API key saved locally
-- **Copy to Clipboard**: Quick copy functionality
-
-### History Management
-- **Audio Playback**: Built-in player with progress tracking
-- **Auto-Organization**: Recordings sorted by date with timestamps
-- **Quick Actions**: Play, download, delete, and transcribe recordings
-- **Beautiful Interface**: Modern design with intuitive controls
-- **Large Storage Capacity**: Uses IndexedDB for unlimited audio storage (no 10MB limit)
+- Record tab audio and microphone simultaneously
+- AI transcription with Google Gemini (free tier available)
+- Built-in audio player and recording history
+- Drag-and-drop file upload support
+- Audio enhancements (noise suppression, echo cancellation)
+- Adjustable volume controls
+- One-click copy transcriptions
 
 ## Installation
 
-1. Clone or download this repository
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable "Developer mode" (top right toggle)
-4. Click "Load unpacked" and select the extension directory
-5. Pin the extension icon to your toolbar for easy access
+1. Download or clone this repository
+2. Open Chrome and go to `chrome://extensions/`
+3. Enable **Developer mode** (toggle in top-right corner)
+4. Click **Load unpacked** and select the extension directory
+5. Pin the extension icon to your toolbar
 
-## Quick Start
+## How to Use
 
 ### Recording Audio
 
-1. Click the extension icon in your toolbar
-2. Navigate to any webpage (not chrome:// system pages)
-3. Click "Start Recording"
-4. Both tab audio and microphone will be recorded
-5. Click "Stop Recording" when finished
-6. Recording is automatically saved to history
+1. Click the TabTalk Recorder icon in your toolbar
+2. Navigate to any webpage
+3. Click **Start Recording**
+4. Click **Stop Recording** when finished
+5. Your recording is saved to history automatically
 
-### Settings Configuration
+### Setting Up Transcription
 
-Access settings by:
-- Clicking the gear icon in the popup or history page
-- Or right-click extension icon → Options
+1. Click the **gear icon** (Settings)
+2. Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+3. Paste your API key and save
 
-**Configure:**
-1. **API Key** - Add your Google Gemini API key
-   - Get FREE key: https://aistudio.google.com/app/apikey
-   - Test key validity with built-in tester
-2. **Model Selection** - Choose transcription model:
-   - gemini 2.5 Flash - Balanced
-   - Gemini 2.5 Flash-lite - Fastest
-   - Gemini 2.5 Pro - Most Accurate
-3. **Audio Settings** - Adjust volume levels for tab and microphone
-4. **Storage Management** - View usage, set limits, clear data
-5. **Preferences** - Auto-transcribe, notifications, etc.
+### Transcribing Recordings
 
-### Quick Transcription Setup
+1. Open **History** from the extension popup
+2. Click the **transcribe** button on any recording
+3. Copy or download your transcription
 
-1. Open Settings (gear icon)
-2. Enter your Gemini API key
-3. Choose your preferred model
-4. Save settings
-5. Start transcribing!
+## Settings
 
-## Technical Details
+Access settings by clicking the gear icon:
 
-### Architecture
-- **Manifest V3**: Modern Chrome extension APIs
-- **Service Worker**: Manages extension lifecycle and state
-- **Offscreen Document**: Handles audio capture with MediaRecorder API
-- **IndexedDB Storage**: Stores audio recordings and transcriptions (unlimited capacity)
-- **Chrome Storage**: Stores settings and configuration
-- **Web Audio API**: Advanced audio mixing and processing
+- **API Key**: Add your Google Gemini API key for transcription
+- **Model Selection**: Choose between Flash, Flash-Lite, or Pro models
+- **Audio Volume**: Adjust tab and microphone volume levels
+- **Auto-Transcribe**: Automatically transcribe after recording
+- **Maximum Recordings**: Set storage limits for auto-cleanup
 
-### Transcription
-- **Service**: Google Gemini 2.5 Flash API
-- **Free Tier**: 15 requests/min, 1500 requests/day
-- **Privacy**: API key stored locally in browser
-- **Format Support**: Handles all audio formats (WebM, MP3, WAV)
+## Getting Your Free API Key
 
-### File Structure
-```
-chrome-recorder-extension/
-├── manifest.json                      # Extension configuration
-├── popup.html/js/css                 # Main extension popup
-├── history.html/js/css               # Recording history page
-├── settings.html/js/css              # Settings and configuration
-├── offscreen.html/js                 # Audio capture context
-├── service-worker.js                 # Background service worker
-├── permission.html/js                # Microphone permission handler
-├── utils/
-│   ├── indexeddb.js                  # IndexedDB database manager
-│   ├── storage.js                    # Storage utilities wrapper
-│   ├── storage-handler.js            # Service worker storage bridge
-│   ├── config.js                     # Configuration manager
-│   └── constants.js                  # App constants
-├── transcription/
-│   ├── base-service.js               # Base transcription service
-│   ├── gemini-service.js             # Gemini AI implementation
-│   └── service-factory.js            # Service factory pattern
-├── icons/                            # Extension icons
-├── fontawesome/                      # Icon library
-├── MIGRATION_GUIDE.md                # IndexedDB migration documentation
-└── README.md                         # This file
-```
+1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Sign in with your Google account
+3. Click **Create API Key**
+4. Copy and paste it in TabTalk Recorder settings
 
-## Permissions Required
-
-- **tabCapture**: For capturing tab audio
-- **storage**: For saving recordings and settings
-- **activeTab**: For accessing current tab information
-- **offscreen**: For background recording capability
-- **host_permissions**: For all URLs to enable recording
-
-## Browser Support
-
-- Chrome 116+ (required)
-- Edge 116+ (Chromium-based, should work but untested)
-
-## Limitations
-
-- Cannot record on Chrome system pages (chrome://, chrome-extension://)
-- Transcription requires internet connection for API calls
-- Free tier has rate limits (15/min, 1500/day)
-- Microphone permission required for recording
-
-## Storage Migration
-
-This extension now uses **IndexedDB** instead of chrome.storage.local for storing audio recordings. This provides:
-- **Unlimited storage capacity** (vs 10MB limit)
-- **Better performance** for large files
-- **Automatic migration** from old storage on first use
-
-See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for detailed information about the storage migration.
+The free tier includes 15 requests/minute and 1,500 requests/day - no credit card required.
 
 ## Troubleshooting
 
-### Transcription Issues
-
-**"Enter your Google Gemini API key"**
-- Get a FREE key from https://aistudio.google.com/app/apikey
-- No credit card required for free tier
-
-**"API request failed"**
-- Check internet connection
-- Verify API key is valid
-- Check if rate limit exceeded (15/min, 1500/day)
-
-**"No speech detected"**
-- Ensure recording contains clear speech
-- Test audio playback first
-- Check microphone was active during recording
-
-### Recording Issues
-
-**No audio captured**
+**No audio captured?**
 - Grant microphone permission
 - Ensure tab has audio playing
 - Avoid chrome:// system pages
 
-**Extension not working**
-- Reload extension in chrome://extensions/
-- Check console for errors
-- Verify all files are present
+**Transcription not working?**
+- Check your API key in settings
+- Verify internet connection
+- Ensure recording has clear speech
 
-### Clear API Key
-Open browser console on History page:
-```javascript
-chrome.storage.local.remove('gemini_api_key');
-location.reload();
-```
+**Extension not working?**
+- Reload extension at `chrome://extensions/`
+- Check that all files are present
 
-## Development
+## Privacy
 
-### Adding Features
-- **UI changes**: Edit HTML/CSS files
-- **Recording logic**: Modify [offscreen.js](offscreen.js)
-- **Storage**: Update [service-worker.js](service-worker.js)
-- **Transcription**: Enhance [transcription-service-gemini.js](transcription-service-gemini.js)
-
-### Code Quality
-The extension follows modern best practices:
-- Clean separation of concerns
-- Modular architecture
-- Comprehensive error handling
-- User-friendly notifications
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed development notes.
+- All recordings stored locally in your browser
+- API key stored locally, only sent to Google's API
+- No data collection or third-party tracking
+- Open source
 
 ## Credits
 
-- **Gemini API**: Google AI
-- **Icons**: Font Awesome 6.5.1
-- **UI Design**: Custom gradient-based modern design
+This project builds upon [chrome-recorder-extension](https://github.com/shebisabeen/chrome-recorder-extension) by [shebisabeen](https://github.com/shebisabeen).
+
+Powered by Google Gemini API.
 
 ## License
 
-See LICENSE file for details.
-
-## Support
-
-For issues or questions:
-1. Check the Troubleshooting section above
-2. Review [DEVELOPMENT.md](DEVELOPMENT.md) for technical details
-3. Open an issue on GitHub
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Made with Chrome Extension APIs** | **Powered by Google Gemini**
+If you find this extension useful, please star the repository!
