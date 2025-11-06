@@ -7,7 +7,12 @@
   "author": "Chrome Audio Recorder Team",
   "homepage_url": "https://github.com/yourusername/chrome-recorder-extension",
   "action": {
-    "default_icon": "icons/not-recording.png",
+    "default_icon": {
+      "16": "icons/not-recording-16.png",
+      "32": "icons/not-recording-32.png",
+      "48": "icons/not-recording-48.png",
+      "128": "icons/not-recording-128.png"
+    },
     "default_popup": "popup.html"
   },
   "options_page": "settings.html",
@@ -29,7 +34,9 @@
     }
   ],
   "icons": {
-    "48": "icons/not-recording.png",
-    "128": "icons/not-recording.png"
+    "16": "icons/not-recording-16.png",
+    "32": "icons/not-recording-32.png",
+    "48": "icons/not-recording-48.png",
+    "128": "icons/not-recording-128.png"
   }
 }

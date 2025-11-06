@@ -38,7 +38,14 @@ chrome.runtime.onMessage.addListener(async (message) => {
             data: streamId,
           });
 
-          chrome.action.setIcon({ path: "/icons/recording.png" });
+          chrome.action.setIcon({
+            path: {
+              "16": "/icons/recording-16.png",
+              "32": "/icons/recording-32.png",
+              "48": "/icons/recording-48.png",
+              "128": "/icons/recording-128.png"
+            }
+          });
         } catch (error) {
           chrome.runtime.sendMessage({
             type: "recording-error",
@@ -49,14 +56,31 @@ chrome.runtime.onMessage.addListener(async (message) => {
         break;
 
       case "recording-stopped":
-        chrome.action.setIcon({ path: "icons/not-recording.png" });
+        chrome.action.setIcon({
+          path: {
+            "16": "icons/not-recording-16.png",
+            "32": "icons/not-recording-32.png",
+            "48": "icons/not-recording-48.png",
+            "128": "icons/not-recording-128.png"
+          }
+        });
         break;
 
       case "update-icon":
         chrome.action.setIcon({
           path: message.recording
-            ? "icons/recording.png"
-            : "icons/not-recording.png",
+            ? {
+                "16": "icons/recording-16.png",
+                "32": "icons/recording-32.png",
+                "48": "icons/recording-48.png",
+                "128": "icons/recording-128.png"
+              }
+            : {
+                "16": "icons/not-recording-16.png",
+                "32": "icons/not-recording-32.png",
+                "48": "icons/not-recording-48.png",
+                "128": "icons/not-recording-128.png"
+              }
         });
         break;
       case "save-recording":
