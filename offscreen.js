@@ -2,7 +2,7 @@ let recorder;
 let data = [];
 let activeStreams = [];
 
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.target === "offscreen") {
     switch (message.type) {
       case "start-recording":
@@ -24,6 +24,17 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 // Handle storage operations from service worker
 async function handleStorageOperation(message, sendResponse) {
   try {
+    // Wait for StorageUtils to be available (loaded by utils/storage.js module)
+    let attempts = 0;
+    while (!window.StorageUtils && attempts < 100) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      attempts++;
+    }
+
+    if (!window.StorageUtils) {
+      throw new Error('StorageUtils not available after waiting');
+    }
+
     switch (message.type) {
       case 'indexeddb-save':
         const key = await window.StorageUtils.saveRecording(

@@ -20,23 +20,13 @@
     "service_worker": "service-worker.js"
   },
   "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
-  "host_permissions": ["*://*/*"],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com;"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com;"
   },
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "permission.html",
-        "offscreen.html"
-      ],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "icons": {
-    "16": "icons/not-recording-16.png",
-    "32": "icons/not-recording-32.png",
-    "48": "icons/not-recording-48.png",
-    "128": "icons/not-recording-128.png"
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   }
 }

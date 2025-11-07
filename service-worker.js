@@ -85,26 +85,30 @@ chrome.runtime.onMessage.addListener(async (message) => {
         break;
       case "save-recording":
         // Delegate to offscreen document for IndexedDB storage
-        try {
-          chrome.runtime.sendMessage({
-            type: 'indexeddb-save',
-            target: 'storage-handler',
-            data: {
-              audioDataUrl: message.data,
-              metadata: {
-                source: 'recording'
+        (async () => {
+          try {
+            chrome.runtime.sendMessage({
+              type: 'indexeddb-save',
+              target: 'storage-handler',
+              data: {
+                audioDataUrl: message.data,
+                metadata: {
+                  source: 'recording'
+                }
               }
-            }
-          }, (response) => {
-            if (response && response.success) {
-              console.log('Recording saved successfully with key:', response.key);
-            } else {
-              console.error('Failed to save recording:', response?.error);
-            }
-          });
-        } catch (error) {
-          console.error('Error saving recording:', error);
-        }
+            }, (response) => {
+              if (chrome.runtime.lastError) {
+                console.error('Error saving recording:', chrome.runtime.lastError.message);
+              } else if (response && response.success) {
+                console.log('Recording saved successfully with key:', response.key);
+              } else {
+                console.error('Failed to save recording:', response?.error || 'Unknown error');
+              }
+            });
+          } catch (error) {
+            console.error('Error saving recording:', error);
+          }
+        })();
         break;
     }
   }

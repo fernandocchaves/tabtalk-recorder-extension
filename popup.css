@@ -40,7 +40,11 @@ body {
   font-size: 24px;
   backdrop-filter: blur(10px);
 }
-
+.app-icon svg {
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+}
 .header-text h1 {
   font-size: 18px;
   font-weight: 600;
