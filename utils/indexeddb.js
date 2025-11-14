@@ -161,6 +161,34 @@ class IndexedDBManager {
   }
 
   /**
+   * Update processed transcription for a specific recording
+   * @param {string} key - Recording key
+   * @param {string} processedTranscription - Processed transcription text
+   * @param {string} promptId - ID of the prompt used for processing
+   * @returns {Promise<void>}
+   */
+  async updateProcessedTranscription(key, processedTranscription, promptId) {
+    await this.init();
+
+    const recording = await this.getRecording(key);
+    if (!recording) {
+      throw new Error(`Recording ${key} not found`);
+    }
+
+    if (!recording.processedTranscriptions) {
+      recording.processedTranscriptions = {};
+    }
+
+    recording.processedTranscriptions[promptId] = {
+      text: processedTranscription,
+      timestamp: Date.now(),
+      promptId: promptId
+    };
+
+    return this.saveRecording(key, recording);
+  }
+
+  /**
    * Delete a specific recording
    * @param {string} key - Recording key
    * @returns {Promise<void>}

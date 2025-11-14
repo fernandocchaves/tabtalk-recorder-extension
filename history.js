@@ -225,6 +225,18 @@ async function transcribeAudio(recordingId) {
           <i class="fas fa-copy"></i>
           Copy
         </button>
+        <button class="transcription-process-btn" data-recording-id="${recordingId}">
+          <i class="fas fa-magic"></i>
+          AI Process
+        </button>
+      </div>
+      <div class="post-processing-section" id="post-processing-${recordingId}" style="display: none;">
+        <div class="post-processing-header">
+          <h4><i class="fas fa-robot"></i> AI Post-Processing</h4>
+        </div>
+        <div class="post-processing-content" id="post-processing-content-${recordingId}">
+          <!-- Will be populated dynamically -->
+        </div>
       </div>
     `;
 
@@ -288,8 +300,25 @@ historyList.addEventListener("click", async (e) => {
               <i class="fas fa-copy"></i>
               Copy
             </button>
+            <button class="transcription-process-btn" data-recording-id="${recordingId}">
+              <i class="fas fa-magic"></i>
+              AI Process
+            </button>
+          </div>
+          <div class="post-processing-section" id="post-processing-${recordingId}" style="display: none;">
+            <div class="post-processing-header">
+              <h4><i class="fas fa-robot"></i> AI Post-Processing</h4>
+            </div>
+            <div class="post-processing-content" id="post-processing-content-${recordingId}">
+              <!-- Will be populated dynamically -->
+            </div>
           </div>
         `;
+
+        // Load any existing processed transcriptions
+        if (recording.processedTranscriptions) {
+          loadProcessedTranscriptions(recordingId, recording.processedTranscriptions);
+        }
 
         transcriptionSection.style.display = 'block';
       } else {
@@ -356,8 +385,9 @@ historyList.addEventListener("click", async (e) => {
     downloadLink.href = recording.data;
     downloadLink.download = `recording-${new Date(recording.timestamp).toISOString()}.webm`;
     downloadLink.click();
-  } else if (target.classList.contains("delete-btn")) {
-    if (confirm('Are you sure you want to delete this recording?')) {
+  } else if (target.classList.contains("delete-btn") && !target.classList.contains("delete-processed-btn")) {
+    const confirmed = await showDeleteConfirmModal('Are you sure you want to delete this recording? This action cannot be undone.');
+    if (confirmed) {
       const key = target.dataset.key;
       await window.StorageUtils.deleteRecording(key);
       loadHistory();
@@ -790,3 +820,542 @@ uploadStyles.textContent = `
   }
 `;
 document.head.appendChild(uploadStyles);
+
+// ========================================
+// AI Post-Processing Logic
+// ========================================
+
+let promptsManager;
+
+// Initialize prompts manager
+async function initPromptsManager() {
+  const module = await import('./utils/prompts.js');
+  promptsManager = module.default;
+}
+
+// Initialize on page load
+initPromptsManager();
+
+// Handle "AI Process" button clicks and processed result actions
+historyList.addEventListener('click', async (e) => {
+  const target = e.target.closest('button');
+  if (!target) return;
+
+  if (target.classList.contains('transcription-process-btn')) {
+    const recordingId = target.dataset.recordingId;
+    await showPostProcessingUI(recordingId);
+  }
+
+  // Handle expand/collapse toggle buttons
+  if (target.classList.contains('expand-toggle')) {
+    const uniqueId = target.dataset.uniqueId;
+    if (uniqueId) {
+      toggleExpandContent(uniqueId);
+    }
+  }
+
+  // Handle copy button
+  if (target.classList.contains('copy-processed-btn')) {
+    const recordingId = target.dataset.recordingId;
+    const promptId = target.dataset.promptId;
+    await copyProcessedText(e, recordingId, promptId, target);
+  }
+
+  // Handle download button
+  if (target.classList.contains('download-processed-btn')) {
+    const recordingId = target.dataset.recordingId;
+    const promptId = target.dataset.promptId;
+    const promptName = target.dataset.promptName;
+    downloadProcessedText(e, recordingId, promptId, promptName, target);
+  }
+
+  // Handle delete button
+  if (target.classList.contains('delete-processed-btn')) {
+    e.stopPropagation(); // Prevent event bubbling to other handlers
+    const recordingId = target.dataset.recordingId;
+    const promptId = target.dataset.promptId;
+    await deleteProcessedText(recordingId, promptId);
+  }
+});
+
+// Toggle expand/collapse for long content
+function toggleExpandContent(uniqueId) {
+  const contentDiv = document.getElementById(`processed-content-${uniqueId}`);
+  const toggleBtn = document.getElementById(`toggle-${uniqueId}`);
+
+  if (contentDiv && toggleBtn) {
+    if (contentDiv.classList.contains('collapsed')) {
+      contentDiv.classList.remove('collapsed');
+      toggleBtn.innerHTML = '<i class="fas fa-chevron-up"></i> Show Less';
+    } else {
+      contentDiv.classList.add('collapsed');
+      toggleBtn.innerHTML = '<i class="fas fa-chevron-down"></i> Show More';
+    }
+  }
+}
+
+// Show post-processing UI
+async function showPostProcessingUI(recordingId) {
+  const postProcessingSection = document.getElementById(`post-processing-${recordingId}`);
+  const postProcessingContent = document.getElementById(`post-processing-content-${recordingId}`);
+
+  if (!postProcessingSection || !postProcessingContent) return;
+
+  // Toggle display
+  if (postProcessingSection.style.display === 'block') {
+    postProcessingSection.style.display = 'none';
+    return;
+  }
+
+  // Load prompts and show UI
+  try {
+    const allPrompts = await promptsManager.getAllPrompts();
+    const promptsArray = Object.values(allPrompts);
+
+    if (promptsArray.length === 0) {
+      postProcessingContent.innerHTML = `
+        <div style="padding: 20px; text-align: center; color: #999;">
+          <i class="fas fa-exclamation-circle" style="font-size: 32px; margin-bottom: 12px;"></i>
+          <p>No prompts available. Please add custom prompts in Settings.</p>
+          <button class="process-run-btn" style="margin-top: 12px;" onclick="chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') })">
+            <i class="fas fa-cog"></i>
+            Open Settings
+          </button>
+        </div>
+      `;
+      postProcessingSection.style.display = 'block';
+      return;
+    }
+
+    // Build prompt selector HTML
+    let promptOptionsHTML = '<option value="">-- Select a prompt --</option>';
+    const promptsByCategory = {};
+
+    promptsArray.forEach(prompt => {
+      const category = prompt.category || 'General';
+      if (!promptsByCategory[category]) {
+        promptsByCategory[category] = [];
+      }
+      promptsByCategory[category].push(prompt);
+    });
+
+    // Add prompts grouped by category
+    Object.keys(promptsByCategory).sort().forEach(category => {
+      promptOptionsHTML += `<optgroup label="${category}">`;
+      promptsByCategory[category].forEach(prompt => {
+        promptOptionsHTML += `<option value="${prompt.id}" data-description="${prompt.description || ''}">${prompt.name}</option>`;
+      });
+      promptOptionsHTML += '</optgroup>';
+    });
+
+    postProcessingContent.innerHTML = `
+      <div class="prompt-selector">
+        <label>Select AI Prompt</label>
+        <select id="prompt-select-${recordingId}">
+          ${promptOptionsHTML}
+        </select>
+        <div class="prompt-description" id="prompt-description-${recordingId}" style="display: none;"></div>
+      </div>
+      <div class="processing-actions">
+        <button class="process-cancel-btn" data-recording-id="${recordingId}">
+          <i class="fas fa-times"></i>
+          Cancel
+        </button>
+        <button class="process-run-btn" data-recording-id="${recordingId}" disabled>
+          <i class="fas fa-play"></i>
+          Run Processing
+        </button>
+      </div>
+      <div id="processing-results-${recordingId}"></div>
+    `;
+
+    // Show section
+    postProcessingSection.style.display = 'block';
+
+    // Setup event listeners
+    const promptSelect = document.getElementById(`prompt-select-${recordingId}`);
+    const promptDescription = document.getElementById(`prompt-description-${recordingId}`);
+    const runBtn = postProcessingContent.querySelector('.process-run-btn');
+    const cancelBtn = postProcessingContent.querySelector('.process-cancel-btn');
+
+    promptSelect.addEventListener('change', () => {
+      const selectedOption = promptSelect.options[promptSelect.selectedIndex];
+      const description = selectedOption.getAttribute('data-description');
+
+      if (selectedOption.value) {
+        runBtn.disabled = false;
+        if (description) {
+          promptDescription.textContent = description;
+          promptDescription.style.display = 'block';
+        } else {
+          promptDescription.style.display = 'none';
+        }
+      } else {
+        runBtn.disabled = true;
+        promptDescription.style.display = 'none';
+      }
+    });
+
+    runBtn.addEventListener('click', () => runPostProcessing(recordingId));
+    cancelBtn.addEventListener('click', () => {
+      postProcessingSection.style.display = 'none';
+    });
+
+    // Load existing processed transcriptions
+    const key = `recording-${recordingId}`;
+    const recording = await window.StorageUtils.getRecording(key);
+    if (recording && recording.processedTranscriptions) {
+      loadProcessedTranscriptions(recordingId, recording.processedTranscriptions);
+    }
+
+  } catch (error) {
+    console.error('Failed to load prompts:', error);
+    postProcessingContent.innerHTML = `
+      <div style="padding: 20px; text-align: center; color: #c62828;">
+        <i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 12px;"></i>
+        <p>Failed to load prompts: ${error.message}</p>
+      </div>
+    `;
+    postProcessingSection.style.display = 'block';
+  }
+}
+
+// Run post-processing with selected prompt
+async function runPostProcessing(recordingId) {
+  const promptSelect = document.getElementById(`prompt-select-${recordingId}`);
+  const selectedPromptId = promptSelect.value;
+
+  if (!selectedPromptId) {
+    alert('Please select a prompt');
+    return;
+  }
+
+  const resultsDiv = document.getElementById(`processing-results-${recordingId}`);
+
+  // Show progress
+  resultsDiv.innerHTML = `
+    <div class="processing-progress">
+      <i class="fas fa-spinner fa-spin"></i>
+      <p>Processing with AI...</p>
+    </div>
+  `;
+
+  try {
+    // Get the recording and transcription
+    const key = `recording-${recordingId}`;
+    const recording = await window.StorageUtils.getRecording(key);
+
+    if (!recording || !recording.transcription) {
+      throw new Error('No transcription available. Please transcribe first.');
+    }
+
+    // Get the prompt
+    const prompt = await promptsManager.getPrompt(selectedPromptId);
+    if (!prompt) {
+      throw new Error('Prompt not found');
+    }
+
+    // Apply transcription to prompt
+    const processedPrompt = await promptsManager.applyTranscription(selectedPromptId, recording.transcription);
+
+    // Process with Gemini
+    const updateProgress = (message) => {
+      resultsDiv.innerHTML = `
+        <div class="processing-progress">
+          <i class="fas fa-spinner fa-spin"></i>
+          <p>${message}</p>
+        </div>
+      `;
+    };
+
+    const processedText = await window.transcriptionService.processTranscription(
+      recording.transcription,
+      processedPrompt,
+      updateProgress
+    );
+
+    // Save processed transcription
+    await window.StorageUtils.updateProcessedTranscription(key, processedText, selectedPromptId);
+
+    // Load and display all processed transcriptions
+    const updatedRecording = await window.StorageUtils.getRecording(key);
+    loadProcessedTranscriptions(recordingId, updatedRecording.processedTranscriptions);
+
+    // Show success message briefly
+    resultsDiv.innerHTML = `
+      <div style="padding: 20px; text-align: center; color: #2e7d32;">
+        <i class="fas fa-check-circle" style="font-size: 32px; margin-bottom: 12px;"></i>
+        <p><strong>Processing completed successfully!</strong></p>
+      </div>
+    `;
+
+    setTimeout(() => {
+      resultsDiv.innerHTML = '';
+      loadProcessedTranscriptions(recordingId, updatedRecording.processedTranscriptions);
+    }, 1500);
+
+  } catch (error) {
+    console.error('Post-processing error:', error);
+    resultsDiv.innerHTML = `
+      <div style="padding: 20px; text-align: center; color: #c62828;">
+        <i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 12px;"></i>
+        <p><strong>Processing failed</strong></p>
+        <p style="font-size: 13px; margin-top: 8px;">${error.message}</p>
+      </div>
+    `;
+  }
+}
+
+// Load and display processed transcriptions
+async function loadProcessedTranscriptions(recordingId, processedTranscriptions) {
+  const resultsDiv = document.getElementById(`processing-results-${recordingId}`);
+  if (!resultsDiv || !processedTranscriptions) return;
+
+  const processedArray = Object.values(processedTranscriptions);
+  if (processedArray.length === 0) return;
+
+  let resultsHTML = '';
+
+  for (const processed of processedArray) {
+    const prompt = await promptsManager.getPrompt(processed.promptId);
+    const promptName = prompt ? prompt.name : 'Unknown Prompt';
+    const promptNameEscaped = promptName.replace(/'/g, "\\'");
+    const timestamp = new Date(processed.timestamp).toLocaleString();
+    const uniqueId = `${recordingId}-${processed.promptId}`;
+
+    // Check if content is long (more than 500 characters)
+    const isLongContent = processed.text.length > 500;
+    const collapsedClass = isLongContent ? 'collapsed' : '';
+
+    resultsHTML += `
+      <div class="processed-result" id="processed-result-${uniqueId}">
+        <div class="processed-result-header">
+          <div>
+            <div class="processed-result-title">
+              <i class="fas fa-check-circle"></i>
+              ${promptName}
+            </div>
+            <small style="color: #999; font-size: 11px;">${timestamp}</small>
+          </div>
+          <div class="processed-result-actions">
+            <button class="copy-processed-btn" data-recording-id="${recordingId}" data-prompt-id="${processed.promptId}" title="Copy to clipboard">
+              <i class="fas fa-copy"></i> Copy
+            </button>
+            <button class="download-processed-btn" data-recording-id="${recordingId}" data-prompt-id="${processed.promptId}" data-prompt-name="${promptNameEscaped}" title="Download as file">
+              <i class="fas fa-download"></i> Download
+            </button>
+            <button class="delete-processed-btn delete-btn" data-recording-id="${recordingId}" data-prompt-id="${processed.promptId}" title="Delete this result">
+              <i class="fas fa-trash"></i> Delete
+            </button>
+          </div>
+        </div>
+        <div class="processed-result-content ${collapsedClass}" id="processed-content-${uniqueId}">
+          ${processed.text}
+        </div>
+        ${isLongContent ? `
+          <button class="expand-toggle" data-unique-id="${uniqueId}" id="toggle-${uniqueId}">
+            <i class="fas fa-chevron-down"></i> Show More
+          </button>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  resultsDiv.innerHTML = resultsHTML;
+}
+
+// Copy processed text to clipboard
+async function copyProcessedText(event, recordingId, promptId, button) {
+  const uniqueId = `${recordingId}-${promptId}`;
+  const contentDiv = document.getElementById(`processed-content-${uniqueId}`);
+
+  if (contentDiv) {
+    try {
+      await navigator.clipboard.writeText(contentDiv.textContent);
+
+      // Show feedback
+      if (button) {
+        const originalHTML = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        button.style.background = '#4caf50';
+
+        setTimeout(() => {
+          button.innerHTML = originalHTML;
+          button.style.background = '';
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Failed to copy:', error);
+      alert('Failed to copy to clipboard');
+    }
+  }
+}
+
+// Download processed text as file
+function downloadProcessedText(event, recordingId, promptId, promptName, button) {
+  console.log('Download called:', { recordingId, promptId, promptName });
+
+  const uniqueId = `${recordingId}-${promptId}`;
+  const contentDiv = document.getElementById(`processed-content-${uniqueId}`);
+
+  console.log('Content div found:', !!contentDiv);
+
+  if (contentDiv) {
+    try {
+      const text = contentDiv.textContent;
+      console.log('Text length:', text.length);
+
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${promptName}-${Date.now()}.txt`;
+
+      console.log('Download link created:', a.download);
+
+      document.body.appendChild(a);
+      a.click();
+
+      console.log('Click triggered');
+
+      // Small delay before cleanup
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+
+      // Show feedback
+      if (button) {
+        const originalHTML = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-check"></i> Downloaded!';
+        button.style.background = '#4caf50';
+
+        setTimeout(() => {
+          button.innerHTML = originalHTML;
+          button.style.background = '';
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Failed to download:', error);
+      alert('Failed to download file: ' + error.message);
+    }
+  } else {
+    console.error('Content div not found with id:', `processed-content-${uniqueId}`);
+    alert('Could not find content to download');
+  }
+}
+
+// Show delete confirmation modal
+function showDeleteConfirmModal(message = 'Are you sure you want to delete this processed result? This action cannot be undone.') {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('deleteConfirmModal');
+    const messageElement = document.getElementById('deleteModalMessage');
+    const cancelBtn = document.getElementById('deleteConfirmCancel');
+    const okBtn = document.getElementById('deleteConfirmOk');
+
+    // Set the message
+    messageElement.textContent = message;
+
+    // Show modal
+    modal.style.display = 'flex';
+
+    // Handle cancel
+    const handleCancel = () => {
+      modal.style.display = 'none';
+      cancelBtn.removeEventListener('click', handleCancel);
+      okBtn.removeEventListener('click', handleOk);
+      modal.removeEventListener('click', handleBackdropClick);
+      resolve(false);
+    };
+
+    // Handle confirm
+    const handleOk = () => {
+      modal.style.display = 'none';
+      cancelBtn.removeEventListener('click', handleCancel);
+      okBtn.removeEventListener('click', handleOk);
+      modal.removeEventListener('click', handleBackdropClick);
+      resolve(true);
+    };
+
+    // Handle backdrop click
+    const handleBackdropClick = (e) => {
+      if (e.target === modal) {
+        handleCancel();
+      }
+    };
+
+    // Attach event listeners
+    cancelBtn.addEventListener('click', handleCancel);
+    okBtn.addEventListener('click', handleOk);
+    modal.addEventListener('click', handleBackdropClick);
+  });
+}
+
+// Delete processed text
+async function deleteProcessedText(recordingId, promptId) {
+  const confirmed = await showDeleteConfirmModal();
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    // Get the recording
+    const key = `recording-${recordingId}`;
+    const recording = await window.StorageUtils.getRecording(key);
+
+    if (!recording || !recording.processedTranscriptions) {
+      throw new Error('Recording or processed transcriptions not found');
+    }
+
+    // Delete the specific processed transcription
+    delete recording.processedTranscriptions[promptId];
+
+    // Save the updated recording using the IndexedDB manager directly
+    // We need to import it first
+    const dbModule = await import('./utils/indexeddb.js');
+    await dbModule.default.saveRecording(key, recording);
+
+    // Remove from UI with animation
+    const uniqueId = `${recordingId}-${promptId}`;
+    const resultDiv = document.getElementById(`processed-result-${uniqueId}`);
+    if (resultDiv) {
+      resultDiv.style.animation = 'fadeOut 0.3s ease-out';
+      setTimeout(() => {
+        resultDiv.remove();
+
+        // Check if there are no more results
+        const resultsDiv = document.getElementById(`processing-results-${recordingId}`);
+        if (resultsDiv && resultsDiv.children.length === 0) {
+          resultsDiv.innerHTML = '';
+        }
+      }, 300);
+    }
+
+    // Show success feedback
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #4caf50;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 10000;
+      font-size: 14px;
+      animation: slideInRight 0.3s ease-out;
+    `;
+    notification.textContent = 'Processed result deleted';
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+      notification.style.animation = 'slideOutRight 0.3s ease-out';
+      setTimeout(() => notification.remove(), 300);
+    }, 2000);
+
+  } catch (error) {
+    console.error('Failed to delete processed text:', error);
+    alert('Failed to delete: ' + error.message);
+  }
+};

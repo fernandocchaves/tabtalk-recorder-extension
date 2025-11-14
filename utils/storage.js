@@ -60,6 +60,17 @@ async function updateTranscription(key, transcription) {
 }
 
 /**
+ * Update processed transcription for a recording
+ * @param {string} key - Recording key
+ * @param {string} processedTranscription - Processed transcription text
+ * @param {string} promptId - ID of the prompt used for processing
+ * @returns {Promise<void>}
+ */
+async function updateProcessedTranscription(key, processedTranscription, promptId) {
+  await dbManager.updateProcessedTranscription(key, processedTranscription, promptId);
+}
+
+/**
  * Get storage usage information
  * @returns {Promise<Object>} - Object with count, sizeInMB, and totalBytes
  */
@@ -139,6 +150,7 @@ if (typeof window !== 'undefined') {
     getRecording,
     deleteRecording,
     updateTranscription,
+    updateProcessedTranscription,
     getStorageInfo,
     clearAllRecordings,
     migrateFromChromeStorage

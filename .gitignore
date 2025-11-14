@@ -71,3 +71,4 @@ src.crx
 *.pem
 
 .claude
+.output

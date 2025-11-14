@@ -489,3 +489,344 @@ style.textContent = `
   }
 `;
 document.head.appendChild(style);
+
+// ========================================
+// Prompts Management
+// ========================================
+
+let promptsManager;
+let currentEditingPromptId = null;
+
+// Initialize prompts manager
+async function initPromptsManager() {
+  // Import dynamically
+  const module = await import('./utils/prompts.js');
+  promptsManager = module.default;
+
+  await loadAllPrompts();
+  setupPromptsEventListeners();
+}
+
+// Setup event listeners for prompts
+function setupPromptsEventListeners() {
+  const addCustomPrompt = document.getElementById('addCustomPrompt');
+  const savePrompt = document.getElementById('savePrompt');
+  const cancelPrompt = document.getElementById('cancelPrompt');
+  const closePromptModal = document.getElementById('closePromptModal');
+  const exportPrompts = document.getElementById('exportPrompts');
+  const importPrompts = document.getElementById('importPrompts');
+  const importPromptsFile = document.getElementById('importPromptsFile');
+
+  if (addCustomPrompt) {
+    addCustomPrompt.addEventListener('click', () => openPromptModal());
+  }
+
+  if (savePrompt) {
+    savePrompt.addEventListener('click', saveCustomPrompt);
+  }
+
+  if (cancelPrompt) {
+    cancelPrompt.addEventListener('click', closePromptModal);
+  }
+
+  if (closePromptModal) {
+    closePromptModal.addEventListener('click', closePromptModal);
+  }
+
+  if (exportPrompts) {
+    exportPrompts.addEventListener('click', exportCustomPrompts);
+  }
+
+  if (importPrompts) {
+    importPrompts.addEventListener('click', () => importPromptsFile.click());
+  }
+
+  if (importPromptsFile) {
+    importPromptsFile.addEventListener('change', importCustomPrompts);
+  }
+
+  // Close modal on background click
+  const promptModal = document.getElementById('promptModal');
+  if (promptModal) {
+    promptModal.addEventListener('click', (e) => {
+      if (e.target === promptModal) {
+        closePromptModal();
+      }
+    });
+  }
+}
+
+// Load and display all prompts
+async function loadAllPrompts() {
+  try {
+    const allPrompts = await promptsManager.getAllPrompts();
+    const builtinList = document.getElementById('builtinPromptsList');
+    const customList = document.getElementById('customPromptsList');
+
+    if (!builtinList || !customList) return;
+
+    // Clear lists
+    builtinList.innerHTML = '';
+    customList.innerHTML = '';
+
+    // Separate built-in and custom prompts
+    const builtinPrompts = [];
+    const customPrompts = [];
+
+    Object.values(allPrompts).forEach(prompt => {
+      if (prompt.isBuiltin) {
+        builtinPrompts.push(prompt);
+      } else {
+        customPrompts.push(prompt);
+      }
+    });
+
+    // Render built-in prompts
+    builtinPrompts.forEach(prompt => {
+      builtinList.appendChild(createPromptItem(prompt, false));
+    });
+
+    // Render custom prompts
+    customPrompts.forEach(prompt => {
+      customList.appendChild(createPromptItem(prompt, true));
+    });
+
+    // Show message if no custom prompts
+    if (customPrompts.length === 0) {
+      customList.innerHTML = '<p style="color: #999; font-style: italic; padding: 20px; text-align: center;">No custom prompts yet. Click "Add Custom Prompt" to create one.</p>';
+    }
+
+  } catch (error) {
+    console.error('Failed to load prompts:', error);
+    showNotification('error', 'Failed to load prompts');
+  }
+}
+
+// Create a prompt item element
+function createPromptItem(prompt, isCustom) {
+  const item = document.createElement('div');
+  item.className = 'prompt-item';
+
+  const icon = document.createElement('div');
+  icon.className = 'prompt-item-icon';
+  icon.innerHTML = '<i class="fas fa-magic"></i>';
+
+  const content = document.createElement('div');
+  content.className = 'prompt-item-content';
+
+  const header = document.createElement('div');
+  header.className = 'prompt-item-header';
+
+  const name = document.createElement('span');
+  name.className = 'prompt-item-name';
+  name.textContent = prompt.name;
+
+  const badge = document.createElement('span');
+  badge.className = `prompt-item-badge ${isCustom ? 'custom' : 'builtin'}`;
+  badge.textContent = isCustom ? 'Custom' : 'Built-in';
+
+  header.appendChild(name);
+  header.appendChild(badge);
+
+  const description = document.createElement('div');
+  description.className = 'prompt-item-description';
+  description.textContent = prompt.description;
+
+  const category = document.createElement('div');
+  category.className = 'prompt-item-category';
+  category.innerHTML = `<i class="fas fa-tag"></i> ${prompt.category || 'General'}`;
+
+  content.appendChild(header);
+  content.appendChild(description);
+  content.appendChild(category);
+
+  const actions = document.createElement('div');
+  actions.className = 'prompt-item-actions';
+
+  // View button
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'btn btn-secondary';
+  viewBtn.innerHTML = '<i class="fas fa-eye"></i> View';
+  viewBtn.onclick = () => viewPrompt(prompt);
+  actions.appendChild(viewBtn);
+
+  // Edit and Delete buttons for custom prompts only
+  if (isCustom) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-secondary';
+    editBtn.innerHTML = '<i class="fas fa-edit"></i> Edit';
+    editBtn.onclick = () => openPromptModal(prompt);
+    actions.appendChild(editBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-danger';
+    deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+    deleteBtn.onclick = () => deleteCustomPrompt(prompt.id);
+    actions.appendChild(deleteBtn);
+  }
+
+  item.appendChild(icon);
+  item.appendChild(content);
+  item.appendChild(actions);
+
+  return item;
+}
+
+// Open prompt modal for adding/editing
+function openPromptModal(prompt = null) {
+  const modal = document.getElementById('promptModal');
+  const modalTitle = document.getElementById('promptModalTitle');
+  const nameInput = document.getElementById('promptName');
+  const categoryInput = document.getElementById('promptCategory');
+  const descriptionInput = document.getElementById('promptDescription');
+  const textInput = document.getElementById('promptText');
+
+  if (!modal) return;
+
+  if (prompt) {
+    // Edit mode
+    modalTitle.textContent = 'Edit Custom Prompt';
+    nameInput.value = prompt.name;
+    categoryInput.value = prompt.category || '';
+    descriptionInput.value = prompt.description || '';
+    textInput.value = prompt.systemPrompt || '';
+    currentEditingPromptId = prompt.id;
+  } else {
+    // Add mode
+    modalTitle.textContent = 'Add Custom Prompt';
+    nameInput.value = '';
+    categoryInput.value = '';
+    descriptionInput.value = '';
+    textInput.value = '';
+    currentEditingPromptId = null;
+  }
+
+  modal.style.display = 'flex';
+}
+
+// Close prompt modal
+function closePromptModal() {
+  const modal = document.getElementById('promptModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+  currentEditingPromptId = null;
+}
+
+// Save custom prompt
+async function saveCustomPrompt() {
+  const nameInput = document.getElementById('promptName');
+  const categoryInput = document.getElementById('promptCategory');
+  const descriptionInput = document.getElementById('promptDescription');
+  const textInput = document.getElementById('promptText');
+
+  const name = nameInput.value.trim();
+  const category = categoryInput.value.trim();
+  const description = descriptionInput.value.trim();
+  const systemPrompt = textInput.value.trim();
+
+  // Validation
+  if (!name) {
+    showNotification('error', 'Please enter a prompt name');
+    nameInput.focus();
+    return;
+  }
+
+  if (!systemPrompt) {
+    showNotification('error', 'Please enter a system prompt');
+    textInput.focus();
+    return;
+  }
+
+  try {
+    const promptId = currentEditingPromptId || `custom-${Date.now()}`;
+
+    await promptsManager.savePrompt(promptId, {
+      name,
+      category: category || 'Custom',
+      description: description || 'Custom prompt',
+      systemPrompt
+    });
+
+    showNotification('success', currentEditingPromptId ? 'Prompt updated successfully' : 'Prompt added successfully');
+    closePromptModal();
+    await loadAllPrompts();
+
+  } catch (error) {
+    console.error('Failed to save prompt:', error);
+    showNotification('error', 'Failed to save prompt: ' + error.message);
+  }
+}
+
+// View prompt details
+function viewPrompt(prompt) {
+  const message = `
+Name: ${prompt.name}
+Category: ${prompt.category || 'General'}
+Description: ${prompt.description}
+
+System Prompt:
+${prompt.systemPrompt}
+  `.trim();
+
+  alert(message);
+}
+
+// Delete custom prompt
+async function deleteCustomPrompt(promptId) {
+  if (!confirm('Are you sure you want to delete this custom prompt?')) {
+    return;
+  }
+
+  try {
+    await promptsManager.deletePrompt(promptId);
+    showNotification('success', 'Prompt deleted successfully');
+    await loadAllPrompts();
+  } catch (error) {
+    console.error('Failed to delete prompt:', error);
+    showNotification('error', 'Failed to delete prompt: ' + error.message);
+  }
+}
+
+// Export custom prompts
+async function exportCustomPrompts() {
+  try {
+    const json = await promptsManager.exportPrompts();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `custom-prompts-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    showNotification('success', 'Custom prompts exported successfully');
+  } catch (error) {
+    console.error('Failed to export prompts:', error);
+    showNotification('error', 'Failed to export prompts');
+  }
+}
+
+// Import custom prompts
+async function importCustomPrompts(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    await promptsManager.importPrompts(text);
+    await loadAllPrompts();
+    showNotification('success', 'Prompts imported successfully');
+  } catch (error) {
+    console.error('Failed to import prompts:', error);
+    showNotification('error', 'Failed to import prompts: ' + error.message);
+  }
+
+  // Reset file input
+  event.target.value = '';
+}
+
+// Initialize prompts on page load
+document.addEventListener('DOMContentLoaded', () => {
+  initPromptsManager();
+});

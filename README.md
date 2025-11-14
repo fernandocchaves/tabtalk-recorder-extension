@@ -1,29 +1,44 @@
 # TabTalk Recorder
 
-> Record browser tab audio and microphone simultaneously with AI-powered transcription
+> Record browser tab audio and microphone simultaneously with AI-powered transcription and post-processing
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome-Web%20Store-blue?logo=google-chrome)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## What is TabTalk Recorder?
 
-TabTalk Recorder is a Chrome extension that lets you capture audio from both your browser tabs and microphone at the same time. Get instant AI transcriptions powered by Google Gemini with just one click.
+TabTalk Recorder is a Chrome extension that lets you capture audio from both your browser tabs and microphone at the same time. Get instant AI transcriptions powered by Google Gemini, then enhance them with custom AI post-processing prompts.
 
 **Key Features:**
 - Dual audio recording (tab + microphone)
 - AI transcription with Google Gemini
-- Unlimited local storage
+- Custom AI post-processing with built-in & custom prompts
+- Unlimited local storage via IndexedDB
 - Privacy-focused - all data stays on your device
 
 ## Features
 
+### Recording & Transcription
 - Record tab audio and microphone simultaneously
 - AI transcription with Google Gemini (free tier available)
+- Multiple model options (Flash, Flash-Lite, Pro)
+- Auto-transcribe option for hands-free workflow
+
+### AI Post-Processing
+- **Built-in Prompts**: Meeting Minutes, Summary, Action Items, Key Points, Q&A Extraction
+- **Custom Prompts**: Create and manage your own AI processing templates
+- **Meeting Minutes Parser**: Automatically converts meetings into structured JSON with tasks, decisions, attendees, timelines, and more
+- **Import/Export**: Share custom prompts with your team
+- **Multiple Results**: Store different processed versions per recording
+
+### User Experience
 - Built-in audio player and recording history
 - Drag-and-drop file upload support
 - Audio enhancements (noise suppression, echo cancellation)
 - Adjustable volume controls
-- One-click copy transcriptions
+- One-click copy/download for transcriptions and processed results
+- Collapsible long content with "Show More/Less" functionality
+- Custom styled modals for better UX
 
 ## Installation
 
@@ -55,15 +70,43 @@ TabTalk Recorder is a Chrome extension that lets you capture audio from both you
 2. Click the **transcribe** button on any recording
 3. Copy or download your transcription
 
+### AI Post-Processing
+
+1. After transcribing, click **AI Process** in the transcription section
+2. Select a prompt from the dropdown (built-in or custom)
+3. Click **Process** to generate AI-enhanced output
+4. View, copy, download, or delete processed results
+5. Process the same transcription with multiple prompts
+
+### Managing Custom Prompts
+
+1. Open **Settings** from the extension popup
+2. Scroll to **AI Post-Processing Prompts**
+3. Click **Add Custom Prompt** to create new templates
+4. Use `{{TRANSCRIPTION}}` as a placeholder in your prompt text
+5. Export/Import prompts to share with others
+
 ## Settings
 
 Access settings by clicking the gear icon:
 
+### Transcription Settings
 - **API Key**: Add your Google Gemini API key for transcription
-- **Model Selection**: Choose between Flash, Flash-Lite, or Pro models
-- **Audio Volume**: Adjust tab and microphone volume levels
+- **Model Selection**: Choose between Gemini 2.5 Flash, Flash-Lite, or Pro models
 - **Auto-Transcribe**: Automatically transcribe after recording
-- **Maximum Recordings**: Set storage limits for auto-cleanup
+
+### Audio Settings
+- **Tab Audio Volume**: Adjust volume of audio from browser tabs (0-2x)
+- **Microphone Volume**: Adjust microphone input volume (0-3x)
+
+### AI Post-Processing Prompts
+- **Built-in Prompts**: View pre-configured prompts for common tasks
+- **Custom Prompts**: Create, edit, and delete your own prompts
+- **Import/Export**: Share prompts as JSON files
+
+### Storage Settings
+- **Maximum Recordings**: Set storage limits for auto-cleanup (5-100)
+- **Clear All Data**: Delete all recordings and reset settings
 
 ## Getting Your Free API Key
 
@@ -90,12 +133,32 @@ The free tier includes 15 requests/minute and 1,500 requests/day - no credit car
 - Reload extension at `chrome://extensions/`
 - Check that all files are present
 
+## Technical Details
+
+### Storage
+- **IndexedDB**: All recordings, transcriptions, and processed results stored locally
+- **Chrome Storage**: Settings and API keys stored locally
+- **No size limits**: Unlike chrome.storage.local (5MB limit), IndexedDB supports large audio files
+
+### Architecture
+- **Modular Design**: Separate services for transcription, storage, and prompts management
+- **CSP Compliant**: No inline scripts, all event handlers use delegation
+- **ES6 Modules**: Modern JavaScript with import/export syntax
+
+### Built-in Prompts
+1. **Meeting Minutes Parser**: Structured JSON output with tasks, decisions, attendees, timelines
+2. **Summary**: Concise overview of main points
+3. **Action Items**: Extracted tasks with assignees and deadlines
+4. **Key Points**: Important highlights and takeaways
+5. **Q&A Extraction**: Questions and answers formatted as pairs
+
 ## Privacy
 
-- All recordings stored locally in your browser
+- All recordings stored locally in your browser (IndexedDB)
 - API key stored locally, only sent to Google's API
+- Transcription data sent to Google Gemini API for processing
 - No data collection or third-party tracking
-- Open source
+- Open source - audit the code yourself
 
 ## Credits
 

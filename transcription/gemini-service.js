@@ -180,6 +180,82 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
            message.includes('403');
   }
 
+  /**
+   * Process transcription with custom system prompt
+   * @param {string} transcription - Original transcription text
+   * @param {string} systemPrompt - Custom system prompt
+   * @param {function} onProgress - Progress callback
+   * @returns {Promise<string>} - Processed transcription
+   */
+  async processTranscription(transcription, systemPrompt, onProgress) {
+    try {
+      if (!this.isReady) {
+        await this.initialize(onProgress);
+      }
+
+      if (onProgress) onProgress('Processing transcription with AI...');
+
+      // Replace {{TRANSCRIPTION}} placeholder in system prompt
+      const processedPrompt = systemPrompt.replace(/\{\{TRANSCRIPTION\}\}/g, transcription);
+
+      // Send to Gemini API
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                {
+                  text: processedPrompt
+                }
+              ]
+            }],
+            generationConfig: {
+              temperature: 0.3,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 8192,
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error?.message || `API request failed: ${response.status}`);
+      }
+
+      if (onProgress) onProgress('Finalizing processed result...');
+
+      const data = await response.json();
+
+      // Extract processed text from Gemini response
+      const processedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!processedText || processedText.trim() === '') {
+        throw new Error('No processed output received');
+      }
+
+      return processedText.trim();
+
+    } catch (error) {
+      console.error('Gemini processing error:', error);
+
+      // If API key is invalid, clear it
+      if (this._isAuthError(error)) {
+        await chrome.storage.local.remove('gemini_api_key');
+        this.isReady = false;
+        this.apiKey = null;
+      }
+
+      throw new Error('Processing failed: ' + error.message);
+    }
+  }
+
   async clearApiKey() {
     await chrome.storage.local.remove('gemini_api_key');
     this.isReady = false;

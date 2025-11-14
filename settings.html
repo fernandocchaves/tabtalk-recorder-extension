@@ -164,6 +164,66 @@
         </div>
       </div>
 
+      <!-- Custom Prompts Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <i class="fas fa-magic"></i>
+          <h2>AI Post-Processing Prompts</h2>
+        </div>
+        <p class="setting-description" style="margin-bottom: 15px;">
+          Manage custom system prompts for processing transcriptions with AI. Built-in prompts are provided, and you can add your own custom prompts.
+        </p>
+
+        <!-- Built-in Prompts List -->
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>Built-in Prompts</label>
+            <p class="setting-description">
+              Pre-configured prompts for common tasks
+            </p>
+          </div>
+          <div class="setting-control">
+            <div id="builtinPromptsList" class="prompts-list"></div>
+          </div>
+        </div>
+
+        <!-- Custom Prompts List -->
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>Custom Prompts</label>
+            <p class="setting-description">
+              Your custom prompts
+            </p>
+          </div>
+          <div class="setting-control">
+            <div id="customPromptsList" class="prompts-list"></div>
+            <button id="addCustomPrompt" class="btn btn-primary" style="margin-top: 10px;">
+              <i class="fas fa-plus"></i> Add Custom Prompt
+            </button>
+          </div>
+        </div>
+
+        <!-- Prompt Import/Export -->
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>Import/Export Prompts</label>
+            <p class="setting-description">
+              Share your custom prompts
+            </p>
+          </div>
+          <div class="setting-control">
+            <div class="button-group">
+              <button id="exportPrompts" class="btn btn-secondary">
+                <i class="fas fa-download"></i> Export Custom Prompts
+              </button>
+              <button id="importPrompts" class="btn btn-secondary">
+                <i class="fas fa-upload"></i> Import Prompts
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- UI Settings -->
       <div class="settings-section">
         <div class="section-header">
@@ -214,11 +274,48 @@
 
     <!-- Hidden file input for import -->
     <input type="file" id="importFile" accept=".json" style="display: none;">
+    <input type="file" id="importPromptsFile" accept=".json" style="display: none;">
+
+    <!-- Custom Prompt Modal -->
+    <div id="promptModal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="promptModalTitle">Add Custom Prompt</h2>
+          <button class="modal-close" id="closePromptModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="promptName">Prompt Name *</label>
+            <input type="text" id="promptName" placeholder="e.g., Meeting Summary" required>
+          </div>
+          <div class="form-group">
+            <label for="promptCategory">Category</label>
+            <input type="text" id="promptCategory" placeholder="e.g., Business, Productivity">
+          </div>
+          <div class="form-group">
+            <label for="promptDescription">Description</label>
+            <textarea id="promptDescription" rows="2" placeholder="Brief description of what this prompt does"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="promptText">System Prompt *</label>
+            <textarea id="promptText" rows="10" placeholder="Enter your system prompt here. Use {{TRANSCRIPTION}} as placeholder for the transcription text." required></textarea>
+            <p class="form-hint">Use <code>{{TRANSCRIPTION}}</code> as a placeholder where the transcription should be inserted.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="savePrompt" class="btn btn-primary">
+            <i class="fas fa-save"></i> Save Prompt
+          </button>
+          <button id="cancelPrompt" class="btn btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
 
     <script src="utils/constants.js"></script>
     <script src="utils/config.js"></script>
     <script type="module" src="utils/indexeddb.js"></script>
     <script type="module" src="utils/storage.js"></script>
+    <script type="module" src="utils/prompts.js"></script>
     <script src="utils/formatters.js"></script>
     <script src="settings.js"></script>
   </body>
