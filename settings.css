@@ -503,6 +503,7 @@ input[type="range"]::-moz-range-thumb {
 .prompts-list {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
   gap: 10px;
   max-height: 400px;
   overflow-y: auto;
@@ -527,6 +528,8 @@ input[type="range"]::-moz-range-thumb {
   align-items: flex-start;
   gap: 12px;
   transition: all 0.2s;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .prompt-item:hover {
@@ -601,12 +604,14 @@ input[type="range"]::-moz-range-thumb {
 .prompt-item-actions {
   display: flex;
   gap: 6px;
+  align-items: center;
   flex-shrink: 0;
 }
 
 .prompt-item-actions .btn {
   padding: 6px 12px;
   font-size: 12px;
+  align-self: center;
   min-width: auto;
 }
 

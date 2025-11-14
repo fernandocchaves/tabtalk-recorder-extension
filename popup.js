@@ -2,6 +2,8 @@
 const startButton = document.getElementById("startRecord");
 const stopButton = document.getElementById("stopRecord");
 const historyButton = document.getElementById("historyButton");
+const recordingTimer = document.getElementById("recordingTimer");
+const timerText = recordingTimer.querySelector(".timer-text");
 
 const notification = document.getElementById("notification");
 const notificationText = notification.querySelector(".notification-text");
@@ -11,6 +13,8 @@ const statusDot = document.querySelector(".status-dot");
 const statusText = document.querySelector(".status-text");
 
 let notificationTimeout;
+let timerInterval = null;
+let recordingStartTime = null;
 
 function showNotification(message, type = "error", duration = 5000) {
   notificationText.textContent = message;
@@ -54,6 +58,43 @@ function setStatus(status, text) {
   statusText.textContent = text;
 }
 
+function startTimer() {
+  recordingStartTime = Date.now();
+  updateTimer();
+
+  timerInterval = setInterval(updateTimer, 1000);
+  recordingTimer.style.display = "flex";
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  recordingTimer.style.display = "none";
+  recordingStartTime = null;
+}
+
+function updateTimer() {
+  if (!recordingStartTime) return;
+
+  const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+
+  timerText.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function getRecordingStartTime(callback) {
+  chrome.storage.local.get(['recordingStartTime'], (result) => {
+    callback(result.recordingStartTime || null);
+  });
+}
+
+function setRecordingStartTime(timestamp) {
+  chrome.storage.local.set({ recordingStartTime: timestamp });
+}
+
 // Close notification when clicking the X button
 notificationClose.addEventListener("click", hideNotification);
 
@@ -86,10 +127,32 @@ async function checkRecordingState() {
     stopButton.style.display = "flex";
     setTimeout(() => stopButton.classList.add("visible"), 10);
     setStatus("recording", "Recording...");
+
+    // Restore timer from stored start time
+    getRecordingStartTime((startTime) => {
+      if (startTime) {
+        recordingStartTime = startTime;
+        updateTimer();
+        timerInterval = setInterval(updateTimer, 1000);
+        recordingTimer.style.display = "flex";
+      }
+    });
   } else {
     startButton.style.display = "flex";
     setTimeout(() => startButton.classList.add("visible"), 10);
     setStatus("", "Ready");
+    stopTimer();
+
+    // Check if there's a stale recording state (from crash or extension reload)
+    // Note: We keep the activeRecordingId in storage so history page can finalize it
+    // The history page will run recovery and then clear the stale state
+    chrome.storage.local.get(['activeRecordingId'], async (result) => {
+      if (result.activeRecordingId) {
+        console.log('Found stale recording state:', result.activeRecordingId);
+        console.log('Recording will be finalized when history page loads');
+        // Don't clear yet - let history page recovery handle it
+      }
+    });
   }
 }
 
@@ -141,6 +204,11 @@ startButton.addEventListener("click", async () => {
       data: streamId,
     });
 
+    // Start timer
+    const startTime = Date.now();
+    setRecordingStartTime(startTime);
+    startTimer();
+
     startButton.classList.remove("visible");
     setTimeout(() => {
       startButton.style.display = "none";
@@ -163,6 +231,10 @@ stopButton.addEventListener("click", () => {
       target: "offscreen",
     });
   }, 500);
+
+  // Stop timer and clear stored start time and active recording ID
+  stopTimer();
+  chrome.storage.local.remove(['recordingStartTime', 'activeRecordingId']);
 
   setStatus("", "Saving...");
   stopButton.classList.remove("visible");
@@ -195,12 +267,16 @@ chrome.runtime.onMessage.addListener((message) => {
         startButton.style.display = "flex";
         stopButton.style.display = "none";
         setStatus("", "Ready");
+        stopTimer();
+        chrome.storage.local.remove(['recordingStartTime', 'activeRecordingId']);
         break;
       case "recording-stopped":
         startButton.style.display = "flex";
         stopButton.style.display = "none";
         setStatus("", "Ready");
         showNotification("Recording saved successfully!", "success", 3000);
+        stopTimer();
+        chrome.storage.local.remove(['recordingStartTime', 'activeRecordingId']);
         break;
     }
   }

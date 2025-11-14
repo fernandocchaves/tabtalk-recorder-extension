@@ -1,7 +1,7 @@
 {
   "name": "TabTalk Recorder",
   "description": "Record tab audio and microphone with AI transcription. Noise suppression, echo cancellation, powered by Google Gemini.",
-  "version": "2.0.1",
+  "version": "2.2.2",
   "manifest_version": 3,
   "minimum_chrome_version": "116",
   "author": "TabTalk Recorder Team",

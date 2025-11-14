@@ -4,12 +4,12 @@ import dbManager from './indexeddb.js';
 /**
  * Save a recording to IndexedDB
  * @param {string} audioDataUrl - Audio data in data URL format
- * @param {Object} metadata - Optional metadata (source, filename, fileSize, mimeType, duration)
+ * @param {Object} metadata - Optional metadata (source, filename, fileSize, mimeType, duration, key)
  * @returns {Promise<string>} - Key of the saved recording
  */
 async function saveRecording(audioDataUrl, metadata = {}) {
-  const timestamp = Date.now();
-  const key = `recording-${timestamp}`;
+  const timestamp = metadata.timestamp || Date.now();
+  const key = metadata.key || `recording-${timestamp}`;
 
   const recordingData = {
     data: audioDataUrl,
@@ -17,6 +17,9 @@ async function saveRecording(audioDataUrl, metadata = {}) {
     transcription: null,
     ...metadata
   };
+
+  // Remove 'key' from recordingData if it was in metadata to avoid duplication
+  delete recordingData.key;
 
   await dbManager.saveRecording(key, recordingData);
 

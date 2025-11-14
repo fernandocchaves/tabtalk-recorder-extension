@@ -110,6 +110,35 @@ chrome.runtime.onMessage.addListener(async (message) => {
           }
         })();
         break;
+
+      case "set-recording-state":
+        // Store recording state in chrome.storage
+        console.log('Setting recording state:', message.data);
+        chrome.storage.local.set({
+          recordingStartTime: message.data.recordingStartTime,
+          activeRecordingId: message.data.activeRecordingId
+        }, () => {
+          console.log('Recording state saved to chrome.storage');
+        });
+        break;
+
+      case "clear-recording-state":
+        // Clear recording state from chrome.storage
+        console.log('Clearing recording state');
+        chrome.storage.local.remove(['activeRecordingId', 'recordingStartTime'], () => {
+          console.log('Recording state cleared from chrome.storage');
+        });
+        break;
+
+      case "finalize-incomplete-recording":
+        // Forward to offscreen document to handle recovery
+        console.log('Finalizing incomplete recording:', message.data.recordingId);
+        chrome.runtime.sendMessage({
+          type: 'finalize-incomplete',
+          target: 'offscreen',
+          data: message.data
+        });
+        break;
     }
   }
 });

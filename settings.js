@@ -512,7 +512,7 @@ function setupPromptsEventListeners() {
   const addCustomPrompt = document.getElementById('addCustomPrompt');
   const savePrompt = document.getElementById('savePrompt');
   const cancelPrompt = document.getElementById('cancelPrompt');
-  const closePromptModal = document.getElementById('closePromptModal');
+  const closePromptModalBtn = document.getElementById('closePromptModal');
   const exportPrompts = document.getElementById('exportPrompts');
   const importPrompts = document.getElementById('importPrompts');
   const importPromptsFile = document.getElementById('importPromptsFile');
@@ -526,11 +526,11 @@ function setupPromptsEventListeners() {
   }
 
   if (cancelPrompt) {
-    cancelPrompt.addEventListener('click', closePromptModal);
+    cancelPrompt.addEventListener('click', () => closePromptModal());
   }
 
-  if (closePromptModal) {
-    closePromptModal.addEventListener('click', closePromptModal);
+  if (closePromptModalBtn) {
+    closePromptModalBtn.addEventListener('click', () => closePromptModal());
   }
 
   if (exportPrompts) {

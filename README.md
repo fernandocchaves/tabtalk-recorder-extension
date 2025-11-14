@@ -70,6 +70,14 @@ TabTalk Recorder is a Chrome extension that lets you capture audio from both you
 2. Click the **transcribe** button on any recording
 3. Copy or download your transcription
 
+**For Long Recordings:**
+- **Live recordings**: Automatically saved in 60-second chunks, then grouped into 5-minute segments for transcription
+- **Uploaded files**: Transcribed as single file (Gemini handles files up to ~2 hours well)
+- 4-second delays between segment requests keep you under Gemini's 15 requests/minute limit
+- Progress displayed as percentage for chunked transcriptions (e.g., "Transcribing segment 5/24... 21%")
+- If chunked transcription fails, use the **Resume Transcription** button to continue from where it stopped
+- For a 2-hour live recording: 24 segments × 4 seconds = ~2 minutes total transcription time
+
 ### AI Post-Processing
 
 1. After transcribing, click **AI Process** in the transcription section
@@ -129,9 +137,16 @@ The free tier includes 15 requests/minute and 1,500 requests/day - no credit car
 - Verify internet connection
 - Ensure recording has clear speech
 
+**Long recording lost or incomplete?**
+- The extension now saves recordings in chunks every 60 seconds
+- If a recording fails to save, chunks are preserved
+- Open the history page to automatically recover incomplete recordings
+- Check browser console for recovery logs
+
 **Extension not working?**
 - Reload extension at `chrome://extensions/`
 - Check that all files are present
+- Clear browser cache and reload the extension
 
 ## Technical Details
 
@@ -139,6 +154,10 @@ The free tier includes 15 requests/minute and 1,500 requests/day - no credit car
 - **IndexedDB**: All recordings, transcriptions, and processed results stored locally
 - **Chrome Storage**: Settings and API keys stored locally
 - **No size limits**: Unlike chrome.storage.local (5MB limit), IndexedDB supports large audio files
+- **Chunked Recording**: Recordings are saved in 60-second chunks during recording to prevent data loss
+- **Auto-Recovery**: Automatically recovers incomplete recordings from chunks on page load
+- **Chunked Transcription**: Long recordings are transcribed chunk-by-chunk to avoid API limits and improve accuracy
+- **Resume Capability**: Failed transcriptions can be resumed from the last successful chunk
 
 ### Architecture
 - **Modular Design**: Separate services for transcription, storage, and prompts management
