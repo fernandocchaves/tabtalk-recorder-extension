@@ -54,6 +54,8 @@ const elements = {
   tabGainValue: document.getElementById('tabGainValue'),
   micGain: document.getElementById('micGain'),
   micGainValue: document.getElementById('micGainValue'),
+  audioQuality: document.getElementById('audioQuality'),
+  qualityDescription: document.getElementById('qualityDescription'),
 
   // Storage
   maxRecordings: document.getElementById('maxRecordings'),
@@ -102,6 +104,8 @@ async function loadSettings() {
     elements.tabGainValue.textContent = `${currentConfig.tabGain || 1.0}x`;
     elements.micGain.value = currentConfig.micGain || 1.5;
     elements.micGainValue.textContent = `${currentConfig.micGain || 1.5}x`;
+    elements.audioQuality.value = currentConfig.audioQuality || 48000;
+    updateQualityDescription();
     elements.maxRecordings.value = currentConfig.maxRecordings || 50;
     elements.showNotifications.checked = currentConfig.showNotifications !== false;
 
@@ -138,6 +142,11 @@ function setupEventListeners() {
 
   elements.micGain.addEventListener('input', (e) => {
     elements.micGainValue.textContent = `${e.target.value}x`;
+    unsavedChanges = true;
+  });
+
+  elements.audioQuality.addEventListener('change', () => {
+    updateQualityDescription();
     unsavedChanges = true;
   });
 
@@ -271,6 +280,20 @@ function updateModelDescription() {
   }
 }
 
+// Update audio quality description
+function updateQualityDescription() {
+  const sampleRate = parseInt(elements.audioQuality.value);
+  const descriptions = {
+    16000: '📊 Smallest files (~1.9 MB per minute) - Good for speech only',
+    22050: '📊 Small files (~2.6 MB per minute) - Voice recordings',
+    32000: '📊 Balanced (~3.8 MB per minute) - Good quality speech and music',
+    44100: '📊 Large files (~5.2 MB per minute) - CD quality, professional use',
+    48000: '📊 Largest files (~5.7 MB per minute) - Studio quality, best fidelity'
+  };
+
+  elements.qualityDescription.textContent = descriptions[sampleRate] || '';
+}
+
 // Save all settings
 async function saveAllSettings() {
   try {
@@ -284,6 +307,7 @@ async function saveAllSettings() {
       autoTranscribe: elements.autoTranscribe.checked,
       tabGain: parseFloat(elements.tabGain.value),
       micGain: parseFloat(elements.micGain.value),
+      audioQuality: parseInt(elements.audioQuality.value),
       maxRecordings: parseInt(elements.maxRecordings.value),
       showNotifications: elements.showNotifications.checked
     });

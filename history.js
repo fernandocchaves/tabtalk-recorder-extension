@@ -2,6 +2,258 @@ const historyList = document.getElementById("historyList");
 const emptyState = document.getElementById("emptyState");
 let currentlyPlayingAudio = null;
 let currentlyPlayingButton = null;
+let chunkPlaybackState = null; // Track sequential chunk playback
+
+// Helper function to get chunk duration from constants
+function getChunkDurationSeconds() {
+  return (window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000) / 1000;
+}
+
+// Helper function to play chunks sequentially
+async function playChunksSequentially(recordingKey, audioElement, playButton) {
+  // Get chunks (use transcription chunks - 'recording-chunk' source)
+  const allRecordings = await window.StorageUtils.getAllRecordings();
+  const chunks = allRecordings
+    .filter(r => r.source === 'recording-chunk' && r.parentRecordingId === recordingKey)
+    .sort((a, b) => a.chunkNumber - b.chunkNumber);
+
+  if (chunks.length === 0) {
+    throw new Error('No chunks found');
+  }
+
+  console.log(`Starting sequential playback of ${chunks.length} chunks...`);
+
+  // Pre-load actual durations for all chunks for accurate seeking
+  console.log('Pre-loading chunk durations...');
+  const chunkDurations = [];
+  const tempAudio = new Audio();
+  const tempBlobUrls = [];
+  const fallbackDuration = getChunkDurationSeconds();
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const blob = dataURLtoBlob(chunk.data);
+    const blobUrl = URL.createObjectURL(blob);
+    tempBlobUrls.push(blobUrl);
+
+    const duration = await new Promise((resolve) => {
+      tempAudio.src = blobUrl;
+      tempAudio.onloadedmetadata = () => {
+        if (!isNaN(tempAudio.duration) && tempAudio.duration > 0) {
+          resolve(tempAudio.duration);
+        } else {
+          // Fallback to chunk interval if can't determine
+          resolve(fallbackDuration);
+        }
+      };
+      tempAudio.onerror = () => {
+        console.warn(`Could not load duration for chunk ${i + 1}, using estimate`);
+        resolve(fallbackDuration);
+      };
+      // Timeout fallback
+      setTimeout(() => resolve(fallbackDuration), 2000);
+    });
+
+    chunkDurations.push(duration);
+    console.log(`Chunk ${i + 1}/${chunks.length}: ${duration.toFixed(2)}s`);
+  }
+
+  // Clean up temp blob URLs
+  tempBlobUrls.forEach(url => URL.revokeObjectURL(url));
+
+  const totalDuration = chunkDurations.reduce((sum, d) => sum + d, 0);
+  console.log(`Total duration: ${totalDuration.toFixed(2)}s (${formatDuration(totalDuration)})`);
+
+  // Initialize playback state
+  chunkPlaybackState = {
+    chunks: chunks,
+    currentIndex: 0,
+    audioElement: audioElement,
+    playButton: playButton,
+    blobUrls: [],
+    chunkDurations: chunkDurations,
+    totalDuration: totalDuration,
+    elapsedTime: 0 // Time played before current chunk
+  };
+
+  // Play first chunk
+  playNextChunk();
+}
+
+function playNextChunk() {
+  if (!chunkPlaybackState) return;
+
+  const { chunks, currentIndex, audioElement, playButton, blobUrls, chunkDurations, elapsedTime } = chunkPlaybackState;
+
+  if (currentIndex >= chunks.length) {
+    // All chunks played
+    console.log('All chunks finished playing');
+    cleanupChunkPlayback();
+
+    const playIcon = playButton.querySelector('.play-icon');
+    const pauseIcon = playButton.querySelector('.pause-icon');
+    playIcon.style.display = 'inline';
+    pauseIcon.style.display = 'none';
+    playButton.classList.remove('playing');
+    currentlyPlayingAudio = null;
+    currentlyPlayingButton = null;
+    return;
+  }
+
+  const chunk = chunks[currentIndex];
+  console.log(`Playing chunk ${currentIndex + 1}/${chunks.length}`);
+
+  // Convert data URL to blob URL
+  const blob = dataURLtoBlob(chunk.data);
+  const blobUrl = URL.createObjectURL(blob);
+  blobUrls.push(blobUrl);
+
+  // Set up audio element for this chunk
+  audioElement.src = blobUrl;
+  audioElement.load();
+
+  // Update chunk duration once we know actual duration
+  audioElement.onloadedmetadata = () => {
+    if (chunkPlaybackState && !isNaN(audioElement.duration)) {
+      // Update the actual duration for this chunk
+      const actualDuration = audioElement.duration;
+      const oldDuration = chunkPlaybackState.chunkDurations[currentIndex];
+      chunkPlaybackState.chunkDurations[currentIndex] = actualDuration;
+      chunkPlaybackState.totalDuration = chunkPlaybackState.totalDuration - oldDuration + actualDuration;
+      console.log(`Chunk ${currentIndex + 1} actual duration: ${actualDuration.toFixed(2)}s, total: ${chunkPlaybackState.totalDuration.toFixed(2)}s`);
+    }
+  };
+
+  // Remove previous ended handler and add new one
+  audioElement.onended = () => {
+    // Update elapsed time with actual chunk duration
+    if (chunkPlaybackState) {
+      chunkPlaybackState.elapsedTime += chunkPlaybackState.chunkDurations[currentIndex];
+      chunkPlaybackState.currentIndex++;
+    }
+    playNextChunk();
+  };
+
+  audioElement.play().catch(err => {
+    console.error('Error playing chunk:', err);
+    cleanupChunkPlayback();
+  });
+}
+
+function cleanupChunkPlayback() {
+  if (chunkPlaybackState && chunkPlaybackState.blobUrls) {
+    chunkPlaybackState.blobUrls.forEach(url => URL.revokeObjectURL(url));
+  }
+  chunkPlaybackState = null;
+}
+
+function stopChunkPlayback() {
+  if (chunkPlaybackState) {
+    chunkPlaybackState.audioElement.pause();
+    chunkPlaybackState.audioElement.onended = null;
+    cleanupChunkPlayback();
+  }
+}
+
+function pauseChunkPlayback() {
+  if (chunkPlaybackState) {
+    chunkPlaybackState.audioElement.pause();
+    // Don't clean up state - keep it for resuming or seeking
+  }
+}
+
+function resumeChunkPlaybackAudio() {
+  if (chunkPlaybackState) {
+    chunkPlaybackState.audioElement.play().catch(err => {
+      console.error('Error resuming chunk playback:', err);
+    });
+  }
+}
+
+// Seek to a specific time in chunked playback
+async function seekChunkedPlayback(targetTime) {
+  if (!chunkPlaybackState) return;
+
+  const { chunks, audioElement, playButton, chunkDurations, totalDuration } = chunkPlaybackState;
+
+  // Convert target time to percentage of total duration
+  const targetPercentage = targetTime / totalDuration;
+
+  // Find which chunk contains the target time
+  let accumulatedTime = 0;
+  let targetChunkIndex = 0;
+  let timeWithinChunk = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkDuration = chunkDurations[i];
+    if (accumulatedTime + chunkDuration > targetTime) {
+      targetChunkIndex = i;
+      timeWithinChunk = targetTime - accumulatedTime;
+      break;
+    }
+    accumulatedTime += chunkDuration;
+    // If we've gone through all chunks, target the last one
+    if (i === chunks.length - 1) {
+      targetChunkIndex = i;
+      timeWithinChunk = Math.max(0, targetTime - accumulatedTime);
+    }
+  }
+
+  console.log(`Seeking to ${targetTime.toFixed(2)}s (${(targetPercentage * 100).toFixed(1)}%) -> chunk ${targetChunkIndex + 1}/${chunks.length}, offset ${timeWithinChunk.toFixed(2)}s`);
+
+  // Update state - set elapsed time to the accumulated time before this chunk
+  chunkPlaybackState.currentIndex = targetChunkIndex;
+  chunkPlaybackState.elapsedTime = accumulatedTime;
+
+  // Load and play the target chunk
+  const chunk = chunks[targetChunkIndex];
+  const blob = dataURLtoBlob(chunk.data);
+  const blobUrl = URL.createObjectURL(blob);
+  chunkPlaybackState.blobUrls.push(blobUrl);
+
+  audioElement.src = blobUrl;
+
+  // Wait for metadata to load, then seek within chunk
+  return new Promise((resolve) => {
+    audioElement.onloadedmetadata = () => {
+      if (chunkPlaybackState && !isNaN(audioElement.duration)) {
+        const actualDuration = audioElement.duration;
+        const oldDuration = chunkPlaybackState.chunkDurations[targetChunkIndex];
+        chunkPlaybackState.chunkDurations[targetChunkIndex] = actualDuration;
+        chunkPlaybackState.totalDuration = chunkPlaybackState.totalDuration - oldDuration + actualDuration;
+
+        // Recalculate elapsed time with actual duration
+        let newElapsedTime = 0;
+        for (let i = 0; i < targetChunkIndex; i++) {
+          newElapsedTime += chunkPlaybackState.chunkDurations[i];
+        }
+        chunkPlaybackState.elapsedTime = newElapsedTime;
+
+        // Seek within the chunk (clamp to valid range)
+        const seekTime = Math.max(0, Math.min(timeWithinChunk, actualDuration - 0.1));
+        audioElement.currentTime = seekTime;
+
+        console.log(`Chunk ${targetChunkIndex + 1} actual duration: ${actualDuration.toFixed(2)}s, seeking to ${seekTime.toFixed(2)}s within chunk`);
+      }
+      resolve();
+    };
+
+    audioElement.load();
+  }).then(() => {
+    // Set up ended handler for next chunk
+    audioElement.onended = () => {
+      if (chunkPlaybackState) {
+        chunkPlaybackState.elapsedTime += chunkPlaybackState.chunkDurations[chunkPlaybackState.currentIndex];
+        chunkPlaybackState.currentIndex++;
+      }
+      playNextChunk();
+    };
+
+    return audioElement.play();
+  }).catch(err => {
+    console.error('Error seeking chunk:', err);
+  });
+}
 
 function formatDuration(seconds) {
   const mins = Math.floor(seconds / 60);
@@ -24,6 +276,305 @@ function formatDate(timestamp) {
   } else {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
+}
+
+// Download recording (handles both single and chunked recordings)
+async function downloadRecording(recordingKey, recordingId) {
+  const allRecordings = await window.StorageUtils.getAllRecordings();
+  const recording = allRecordings.find(r => r.key === recordingKey);
+
+  if (!recording) {
+    throw new Error('Recording not found');
+  }
+
+  // Load user's quality settings
+  let userSampleRate = 48000; // Default
+  try {
+    // Use the global singleton instance
+    if (typeof window.configManager !== 'undefined') {
+      // Ensure config is loaded
+      if (!window.configManager.loaded) {
+        await window.configManager.load();
+      }
+      userSampleRate = window.configManager.get('audioQuality') || 48000;
+      console.log(`User's configured audio quality: ${userSampleRate} Hz`);
+    } else {
+      console.warn('ConfigManager not available, using default 48kHz');
+    }
+  } catch (error) {
+    console.warn('Failed to load user config, using default 48kHz:', error);
+  }
+
+  // Generate filename based on timestamp
+  const date = new Date(recording.timestamp);
+  const dateStr = date.toISOString().slice(0, 19).replace(/[T:]/g, '-');
+
+  // For PCM recordings, always convert to WAV (has proper duration)
+  // For non-PCM recordings with WebM data, download WebM directly
+  if (recording.data && recording.data !== 'data:audio/webm;base64,' && !recording.isPcm) {
+    // Download the WebM directly (old format, non-PCM continuous recording)
+    const blob = dataURLtoBlob(recording.data);
+    const filename = `tabtalk-${dateStr}.webm`;
+    downloadBlob(blob, filename);
+    console.log(`Downloaded: ${filename} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+    return;
+  }
+
+  // Fallback: Check for PCM chunks (for crash recovery or old format)
+  if (recording.isChunked || recording.chunksCount > 0) {
+    const chunks = allRecordings
+      .filter(r => r.source === 'recording-chunk' && r.parentRecordingId === recordingKey)
+      .sort((a, b) => a.chunkNumber - b.chunkNumber);
+
+    if (chunks.length === 0) {
+      throw new Error('No audio chunks found for this recording');
+    }
+
+    console.log(`Found ${chunks.length} chunks for conversion...`);
+
+    // Check if chunks are PCM format
+    const isPcmFormat = chunks[0].format === 'pcm-float32';
+
+    if (isPcmFormat) {
+      // Convert PCM chunks to WAV using user's quality setting
+      console.log('Converting PCM chunks to WAV...');
+      const recordedSampleRate = recording.sampleRate || 48000;
+      const wavBlob = await convertPcmChunksToWav(
+        chunks,
+        recordedSampleRate,
+        recording.numberOfChannels || 1,
+        userSampleRate // Pass user's desired sample rate
+      );
+      const filename = `tabtalk-${dateStr}.wav`;
+      downloadBlob(wavBlob, filename);
+      console.log(`Downloaded: ${filename} (${(wavBlob.size / 1024 / 1024).toFixed(2)} MB) at ${userSampleRate} Hz`);
+    } else {
+      // Old WebM chunk format - merge them
+      console.log('Merging WebM chunks...');
+      const mergedBlob = await mergeAudioChunks(chunks);
+      const filename = `tabtalk-${dateStr}.wav`;
+      downloadBlob(mergedBlob, filename);
+      console.log(`Downloaded merged: ${filename} (${(mergedBlob.size / 1024 / 1024).toFixed(2)} MB)`);
+    }
+  } else {
+    throw new Error('No audio data available for download');
+  }
+}
+
+// Convert PCM Float32 chunks to WAV file
+async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targetSampleRate = null) {
+  // Calculate total samples
+  const totalSamples = chunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
+
+  console.log(`Converting ${chunks.length} PCM chunks (${totalSamples} samples) to WAV...`);
+
+  // Concatenate all PCM data
+  const allPcmData = new Float32Array(totalSamples);
+  let offset = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`Loading PCM chunk ${i + 1}/${chunks.length}...`);
+
+    // Decode base64 data to Float32Array
+    const base64Data = chunks[i].data.split(',')[1];
+    const binaryString = atob(base64Data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let j = 0; j < binaryString.length; j++) {
+      bytes[j] = binaryString.charCodeAt(j);
+    }
+
+    const pcmData = new Float32Array(bytes.buffer);
+    allPcmData.set(pcmData, offset);
+    offset += pcmData.length;
+  }
+
+  // Apply downsampling if target sample rate is different
+  let finalPcmData = allPcmData;
+  let finalSampleRate = sampleRate;
+
+  if (targetSampleRate && targetSampleRate !== sampleRate) {
+    console.log(`Downsampling from ${sampleRate} Hz to ${targetSampleRate} Hz...`);
+    finalPcmData = downsamplePcm(allPcmData, sampleRate, targetSampleRate);
+    finalSampleRate = targetSampleRate;
+  }
+
+  // Convert to WAV
+  return pcmFloat32ToWav(finalPcmData, finalSampleRate, numberOfChannels);
+}
+
+// Downsample PCM data from one sample rate to another
+function downsamplePcm(pcmData, fromSampleRate, toSampleRate) {
+  if (fromSampleRate === toSampleRate) {
+    return pcmData;
+  }
+
+  const ratio = fromSampleRate / toSampleRate;
+  const outputLength = Math.floor(pcmData.length / ratio);
+  const downsampled = new Float32Array(outputLength);
+
+  // Linear interpolation for downsampling
+  for (let i = 0; i < outputLength; i++) {
+    const sourceIndex = i * ratio;
+    const index0 = Math.floor(sourceIndex);
+    const index1 = Math.min(index0 + 1, pcmData.length - 1);
+    const fraction = sourceIndex - index0;
+    downsampled[i] = pcmData[index0] * (1 - fraction) + pcmData[index1] * fraction;
+  }
+
+  return downsampled;
+}
+
+// Convert Float32Array PCM data to WAV Blob
+function pcmFloat32ToWav(pcmData, sampleRate, numberOfChannels) {
+  const format = 1; // PCM
+  const bitDepth = 16;
+
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numberOfChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcmData.length * bytesPerSample;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const arrayBuffer = new ArrayBuffer(totalSize);
+  const view = new DataView(arrayBuffer);
+
+  // WAV header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Write PCM data (convert Float32 to Int16)
+  let writeOffset = 44;
+  for (let i = 0; i < pcmData.length; i++) {
+    const sample = Math.max(-1, Math.min(1, pcmData[i]));
+    const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    view.setInt16(writeOffset, int16, true);
+    writeOffset += 2;
+  }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+// Merge multiple audio chunks into a single WAV file using Web Audio API
+async function mergeAudioChunks(chunks) {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuffers = [];
+
+  // Decode each chunk
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`Decoding chunk ${i + 1}/${chunks.length}...`);
+    const blob = dataURLtoBlob(chunks[i].data);
+    const arrayBuffer = await blob.arrayBuffer();
+
+    try {
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      audioBuffers.push(audioBuffer);
+    } catch (error) {
+      console.error(`Failed to decode chunk ${i + 1}:`, error);
+      throw new Error(`Failed to decode chunk ${i + 1}: ${error.message}`);
+    }
+  }
+
+  // Calculate total length
+  const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.length, 0);
+  const sampleRate = audioBuffers[0].sampleRate;
+  const numberOfChannels = audioBuffers[0].numberOfChannels;
+
+  console.log(`Merging ${audioBuffers.length} buffers: ${totalLength} samples, ${sampleRate}Hz, ${numberOfChannels} channels`);
+
+  // Create merged buffer
+  const mergedBuffer = audioContext.createBuffer(numberOfChannels, totalLength, sampleRate);
+
+  // Copy data from each buffer
+  let offset = 0;
+  for (const buffer of audioBuffers) {
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const channelData = mergedBuffer.getChannelData(channel);
+      channelData.set(buffer.getChannelData(channel), offset);
+    }
+    offset += buffer.length;
+  }
+
+  // Convert to WAV
+  const wavBlob = audioBufferToWav(mergedBuffer);
+  audioContext.close();
+
+  return wavBlob;
+}
+
+// Convert AudioBuffer to WAV Blob
+function audioBufferToWav(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = buffer.length * blockAlign;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const arrayBuffer = new ArrayBuffer(totalSize);
+  const view = new DataView(arrayBuffer);
+
+  // WAV header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Write audio data
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let channel = 0; channel < numChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+      const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, int16, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+// Helper function to download a blob
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function loadHistory() {
@@ -138,11 +689,26 @@ async function loadHistory() {
 
   console.log('Total incomplete recordings:', incompleteRecordings.length);
 
+  // Attach chunks to final recordings as well (for transcription)
+  const finalRecordingsWithChunks = finalRecordings.map(recording => {
+    const recordingChunks = chunksByParent[recording.key];
+    if (recordingChunks && recordingChunks.length > 0) {
+      recordingChunks.sort((a, b) => a.chunkNumber - b.chunkNumber);
+      return {
+        ...recording,
+        chunks: recordingChunks,
+        chunkCount: recordingChunks.length
+      };
+    }
+    return recording;
+  });
+
   // Combine and sort all recordings by timestamp (newest first)
-  const allDisplayRecordings = [...finalRecordings, ...incompleteRecordings]
+  const allDisplayRecordings = [...finalRecordingsWithChunks, ...incompleteRecordings]
     .sort((a, b) => b.timestamp - a.timestamp);
 
   console.log('Final recordings to display:', finalRecordings.length);
+  console.log('Final recordings with chunks:', finalRecordingsWithChunks.filter(r => r.chunkCount).map(r => ({ key: r.key, chunkCount: r.chunkCount })));
   console.log('Incomplete recordings to display:', incompleteRecordings.length);
   console.log('Incomplete recordings detail:', incompleteRecordings.map(r => ({ key: r.key, chunkCount: r.chunkCount, isIncomplete: r.isIncomplete })));
   console.log('Total recordings to display:', allDisplayRecordings.length);
@@ -177,16 +743,18 @@ async function loadHistory() {
     const displayName = isUploaded && recording.filename ? recording.filename : fileName;
     const iconClass = isUploaded ? 'fa-file-audio' : 'fa-microphone';
 
-    // For incomplete recordings, create temporary merged audio for playback
+    // For recordings with chunks (incomplete or chunked), merge for playback
+    // BUT: PCM recordings have WebM preview, so don't merge chunks for them
     let audioSrc = null;
-    const hasAudio = recording.data || (isIncomplete && recording.chunks && recording.chunks.length > 0);
+    const needsChunkMerging = (isIncomplete || recording.isChunked) && recording.chunks && recording.chunks.length > 0 && !recording.isPcm;
+    const hasAudio = (recording.data && recording.data !== 'data:audio/webm;base64,') || needsChunkMerging;
 
     let estimatedDuration = null;
-    if (isIncomplete && recording.chunks && recording.chunks.length > 0) {
-      // Merge chunks for playback
-      const blobs = recording.chunks.map(chunk => dataURLtoBlob(chunk.data));
-      const mergedBlob = new Blob(blobs, { type: 'audio/webm' });
-      audioSrc = URL.createObjectURL(mergedBlob);
+    let needsWavConversion = false;
+    if (needsChunkMerging) {
+      // Merge chunks in background for playback
+      // Use placeholder for now, will merge on first play
+      audioSrc = 'pending-merge'; // Special marker
 
       // Estimate duration from chunks (each chunk is ~60 seconds)
       const lastChunk = recording.chunks[recording.chunks.length - 1];
@@ -195,10 +763,17 @@ async function loadHistory() {
       } else {
         estimatedDuration = recording.chunks.length * 60; // 60 seconds per chunk
       }
-    } else if (recording.data) {
-      // Convert data URL to blob URL to avoid CSP issues
+    } else if (recording.data && recording.data !== 'data:audio/webm;base64,') {
+      // Convert data URL to blob URL for playback (WebM preview for PCM recordings)
       const blob = dataURLtoBlob(recording.data);
       audioSrc = URL.createObjectURL(blob);
+
+      // Check if this is a PCM recording that needs WAV conversion for seeking
+      if (recording.isPcm && recording.chunksCount > 0) {
+        // Mark for optional WAV conversion (for seeking capability)
+        needsWavConversion = true;
+        estimatedDuration = recording.duration;
+      }
     }
 
     recordingCard.innerHTML = `
@@ -224,7 +799,7 @@ async function loadHistory() {
         ${hasAudio ? `
         <div class="audio-player">
           <audio id="audio-${recordingId}" preload="metadata">
-            <source src="${audioSrc}" type="audio/webm">
+            ${audioSrc && audioSrc !== 'pending-merge' ? `<source src="${audioSrc}" type="audio/webm">` : ''}
           </audio>
           <div class="player-controls">
             <button class="play-btn" data-key="${key}" data-audio-id="audio-${recordingId}">
@@ -236,7 +811,7 @@ async function loadHistory() {
               </span>
             </button>
             <div class="progress-container">
-              <div class="progress-bar">
+              <div class="progress-bar seekable" data-audio-id="audio-${recordingId}" data-recording-key="${key}">
                 <div class="progress-fill" id="progress-${recordingId}"></div>
               </div>
               <div class="time-display">
@@ -256,7 +831,7 @@ async function loadHistory() {
           <button class="action-btn transcribe-btn ${hasTranscription}" data-key="${key}" data-recording-id="${recordingId}" title="${transcribeTitle}">
             <i class="fas fa-file-alt"></i>
           </button>
-          <button class="action-btn download-btn" data-key="${key}" title="Download">
+          <button class="action-btn download-btn" data-key="${key}" data-recording-id="${recordingId}" title="Download">
             <i class="fas fa-download"></i>
           </button>
           <button class="action-btn delete-btn" data-key="${key}" title="Delete">
@@ -346,20 +921,46 @@ async function loadHistory() {
       audioElement.load();
 
       audioElement.addEventListener('timeupdate', () => {
-        // Use the known duration (from metadata or estimated) instead of audioElement.duration
-        const knownDuration = recording.duration || estimatedDuration || audioElement.duration;
-        const progress = knownDuration ? (audioElement.currentTime / knownDuration) * 100 : 0;
+        // Check if this is part of chunk playback
+        let totalCurrentTime = audioElement.currentTime;
+        let totalDuration = recording.duration || estimatedDuration || audioElement.duration;
+
+        if (chunkPlaybackState && chunkPlaybackState.audioElement === audioElement) {
+          // Use total time across all chunks
+          totalCurrentTime = chunkPlaybackState.elapsedTime + audioElement.currentTime;
+          totalDuration = chunkPlaybackState.totalDuration;
+        }
+
+        // Handle case where duration is Infinity (continuous WebM recording)
+        if (!isFinite(totalDuration) || totalDuration === 0) {
+          totalDuration = recording.duration || estimatedDuration || 0;
+        }
+
+        const progress = totalDuration > 0 ? (totalCurrentTime / totalDuration) * 100 : 0;
         const progressElement = document.getElementById(`progress-${recordingId}`);
         const currentTimeElement = document.getElementById(`current-time-${recordingId}`);
-        if (progressElement && !isNaN(progress)) {
-          progressElement.style.width = progress + '%';
+        if (progressElement && !isNaN(progress) && isFinite(progress)) {
+          progressElement.style.width = Math.min(100, progress) + '%';
         }
         if (currentTimeElement) {
-          currentTimeElement.textContent = formatDuration(audioElement.currentTime);
+          currentTimeElement.textContent = formatDuration(totalCurrentTime);
         }
       });
 
+      // Store chunk info for merged playback
+      if (needsChunkMerging) {
+        audioElement.dataset.needsMerge = 'true';
+        audioElement.dataset.recordingKey = key;
+      }
+
+      // Store WAV conversion info for PCM recordings
+      if (needsWavConversion) {
+        audioElement.dataset.needsWavConversion = 'true';
+        audioElement.dataset.recordingKey = key;
+      }
+
       audioElement.addEventListener('ended', () => {
+        // Playback ended
         const playBtn = recordingCard.querySelector('.play-btn');
         if (playBtn) {
           playBtn.querySelector('.play-icon').style.display = 'inline';
@@ -383,6 +984,13 @@ async function recordingHasChunks(recordingKey) {
   const chunks = allRecordings.filter(
     r => r.source === 'recording-chunk' && r.parentRecordingId === recordingKey
   );
+  console.log(`Checking chunks for ${recordingKey}:`, {
+    totalRecordings: allRecordings.length,
+    chunkRecordings: allRecordings.filter(r => r.source === 'recording-chunk').length,
+    matchingChunks: chunks.length,
+    chunkKeys: chunks.map(c => c.key),
+    allChunkParents: allRecordings.filter(r => r.source === 'recording-chunk').map(c => c.parentRecordingId)
+  });
   return chunks.length > 0;
 }
 
@@ -417,32 +1025,46 @@ async function transcribeAudio(recordingId) {
 
     // Check if this recording has chunks (indicating it needs chunked transcription)
     const hasChunks = await recordingHasChunks(key);
+    console.log(`Recording ${key} has chunks:`, hasChunks);
     let transcriptionText;
 
     if (hasChunks) {
+      console.log('Using chunked transcription for recording:', key);
+
       // Use chunked transcription for recordings with chunks
       const updateStatus = (message, chunkIndex, totalChunks) => {
-        const progress = totalChunks > 0 ? Math.round((chunkIndex / totalChunks) * 100) : 0;
+        const progress = totalChunks > 0 ? Math.round(((chunkIndex + 1) / totalChunks) * 100) : 0;
+
+        // Update status badge and progress bar
         transcriptionStatus.innerHTML = `
           <span class="status-badge status-transcribing">
             <i class="fas fa-spinner fa-spin"></i>
             ${message}
-            <span class="progress-indicator">${progress}%</span>
+            <div class="transcription-progress-bar" style="margin-top: 8px;">
+              <div class="transcription-progress-fill" style="width: ${progress}%"></div>
+            </div>
+            <span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks})</span>
           </span>
         `;
       };
 
-      updateStatus('Initializing chunked transcription...', 0, 1);
+      updateStatus('Initializing chunked transcription...', -1, 1);
 
-      // Use chunked transcription
-      transcriptionText = await window.transcriptionService.transcribeChunked(
-        key,
-        updateStatus
-      );
+      try {
+        // Use chunked transcription
+        transcriptionText = await window.transcriptionService.transcribeChunked(
+          key,
+          updateStatus
+        );
 
-      // Clear transcription state after successful completion
-      await window.transcriptionService.clearTranscriptionState(key);
+        // Clear transcription state after successful completion
+        await window.transcriptionService.clearTranscriptionState(key);
+      } catch (err) {
+        console.error('Transcription error:', err);
+        throw err;
+      }
     } else {
+      console.log('Using regular transcription for recording:', key);
       // Use regular transcription for single-file recordings
       const updateStatus = (message) => {
         transcriptionStatus.innerHTML = `
@@ -464,12 +1086,16 @@ async function transcribeAudio(recordingId) {
     // Save transcription to storage
     await window.StorageUtils.updateTranscription(key, transcriptionText);
 
-    // Update status to completed
+    // Update status to completed with retry button
     transcriptionStatus.innerHTML = `
       <span class="status-badge status-completed">
         <i class="fas fa-check-circle"></i>
         Completed
       </span>
+      <button class="transcription-retry-btn" data-recording-id="${recordingId}">
+        <i class="fas fa-redo"></i>
+        Retry
+      </button>
     `;
 
     // Escape HTML and preserve line breaks for transcription display
@@ -567,17 +1193,20 @@ async function resumeChunkedTranscription(recordingId) {
     }
 
     const updateStatus = (message, chunkIndex, totalChunks) => {
-      const progress = totalChunks > 0 ? Math.round((chunkIndex / totalChunks) * 100) : 0;
+      const progress = totalChunks > 0 ? Math.round(((chunkIndex + 1) / totalChunks) * 100) : 0;
       transcriptionStatus.innerHTML = `
         <span class="status-badge status-transcribing">
           <i class="fas fa-spinner fa-spin"></i>
           ${message}
-          <span class="progress-indicator">${progress}%</span>
+          <div class="transcription-progress-bar" style="margin-top: 8px;">
+            <div class="transcription-progress-fill" style="width: ${progress}%"></div>
+          </div>
+          <span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks} segments)</span>
         </span>
       `;
     };
 
-    updateStatus('Resuming transcription...', 0, 1);
+    updateStatus('Resuming transcription...', -1, 1);
 
     // Resume chunked transcription
     const transcriptionText = await window.transcriptionService.resumeChunkedTranscription(
@@ -591,12 +1220,16 @@ async function resumeChunkedTranscription(recordingId) {
     // Clear transcription state after successful completion
     await window.transcriptionService.clearTranscriptionState(key);
 
-    // Update status to completed
+    // Update status to completed with retry button
     transcriptionStatus.innerHTML = `
       <span class="status-badge status-completed">
         <i class="fas fa-check-circle"></i>
         Completed
       </span>
+      <button class="transcription-retry-btn" data-recording-id="${recordingId}">
+        <i class="fas fa-redo"></i>
+        Retry
+      </button>
     `;
 
     // Escape HTML and preserve line breaks for transcription display
@@ -683,6 +1316,10 @@ historyList.addEventListener("click", async (e) => {
             <i class="fas fa-check-circle"></i>
             Completed
           </span>
+          <button class="transcription-retry-btn" data-recording-id="${recordingId}">
+            <i class="fas fa-redo"></i>
+            Retry
+          </button>
         `;
 
         // Escape HTML and preserve line breaks for existing transcription display
@@ -731,6 +1368,16 @@ historyList.addEventListener("click", async (e) => {
     }
   } else if (target.classList.contains("transcription-retry-btn")) {
     const recordingId = target.dataset.recordingId;
+    const key = `recording-${recordingId}`;
+
+    // Clear existing transcription
+    await window.StorageUtils.updateTranscription(key, null);
+
+    // Clear any transcription state
+    if (window.transcriptionService && window.transcriptionService.clearTranscriptionState) {
+      await window.transcriptionService.clearTranscriptionState(key);
+    }
+
     const transcribeBtn = document.querySelector(`.transcribe-btn[data-recording-id="${recordingId}"]`);
 
     // Click twice to close and reopen (which triggers retry)
@@ -761,6 +1408,7 @@ historyList.addEventListener("click", async (e) => {
 
     // Stop currently playing audio if different
     if (currentlyPlayingAudio && currentlyPlayingAudio !== audioElement) {
+      stopChunkPlayback(); // Stop any chunk playback
       currentlyPlayingAudio.pause();
       currentlyPlayingAudio.currentTime = 0;
       if (currentlyPlayingButton) {
@@ -768,6 +1416,115 @@ historyList.addEventListener("click", async (e) => {
         currentlyPlayingButton.querySelector('.pause-icon').style.display = 'none';
         currentlyPlayingButton.classList.remove('playing');
       }
+    }
+
+    // Check if audio needs WAV conversion (PCM recording for seekable playback)
+    if (audioElement.dataset.needsWavConversion === 'true' && !audioElement.src.startsWith('blob:')) {
+      const recordingKey = audioElement.dataset.recordingKey;
+
+      playIcon.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+      // Convert PCM chunks to WAV for seekable playback
+      (async () => {
+        try {
+          console.log('Converting PCM to WAV for seekable playback...');
+          const recording = await window.StorageUtils.getRecording(recordingKey);
+          const allRecordings = await window.StorageUtils.getAllRecordings();
+          const chunks = allRecordings.filter(r =>
+            r.source === 'recording-chunk' && r.parentRecordingId === recordingKey
+          ).sort((a, b) => a.chunkNumber - b.chunkNumber);
+
+          if (chunks.length === 0) {
+            throw new Error('No PCM chunks found');
+          }
+
+          const wavBlob = await convertPcmChunksToWav(
+            chunks,
+            recording.sampleRate || 48000,
+            recording.numberOfChannels || 1
+          );
+
+          const wavUrl = URL.createObjectURL(wavBlob);
+          audioElement.src = wavUrl;
+          audioElement.load();
+
+          // Wait for metadata to load so we get proper duration
+          await new Promise((resolve, reject) => {
+            audioElement.addEventListener('loadedmetadata', resolve, { once: true });
+            audioElement.addEventListener('error', reject, { once: true });
+            setTimeout(() => reject(new Error('Timeout loading audio')), 10000);
+          });
+
+          console.log('WAV conversion complete, duration:', audioElement.duration);
+
+          // Store the duration for seeking if audioElement.duration is valid
+          if (isFinite(audioElement.duration) && audioElement.duration > 0) {
+            audioElement.dataset.actualDuration = audioElement.duration;
+          } else if (recording.duration) {
+            // Fallback to stored duration
+            audioElement.dataset.actualDuration = recording.duration;
+          }
+
+          // Mark conversion as complete
+          delete audioElement.dataset.needsWavConversion;
+          audioElement.play();
+          playIcon.innerHTML = '<i class="fas fa-play"></i>';
+          playIcon.style.display = 'none';
+          pauseIcon.style.display = 'inline';
+          target.classList.add('playing');
+          currentlyPlayingAudio = audioElement;
+          currentlyPlayingButton = target;
+        } catch (err) {
+          console.error('Error converting PCM to WAV:', err);
+          alert('Error preparing audio for playback: ' + err.message);
+          playIcon.innerHTML = '<i class="fas fa-play"></i>';
+        }
+      })();
+
+      return;
+    }
+
+    // Check if audio needs chunk playback (chunked recording)
+    if (audioElement.dataset.needsMerge === 'true' && !chunkPlaybackState) {
+      // Start sequential chunk playback
+      const recordingKey = audioElement.dataset.recordingKey;
+
+      playIcon.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+      playChunksSequentially(recordingKey, audioElement, target).then(() => {
+        playIcon.innerHTML = '<i class="fas fa-play"></i>';
+        playIcon.style.display = 'none';
+        pauseIcon.style.display = 'inline';
+        target.classList.add('playing');
+        currentlyPlayingAudio = audioElement;
+        currentlyPlayingButton = target;
+      }).catch(err => {
+        console.error('Error starting chunk playback:', err);
+        alert('Error preparing audio for playback: ' + err.message);
+        playIcon.innerHTML = '<i class="fas fa-play"></i>';
+      });
+
+      return;
+    }
+
+    // Handle chunked playback resume/pause
+    if (chunkPlaybackState && chunkPlaybackState.audioElement === audioElement) {
+      if (audioElement.paused) {
+        // Resume chunked playback
+        resumeChunkPlaybackAudio();
+        playIcon.style.display = 'none';
+        pauseIcon.style.display = 'inline';
+        target.classList.add('playing');
+        currentlyPlayingAudio = audioElement;
+        currentlyPlayingButton = target;
+      } else {
+        // Pause chunked playback (preserve state for seeking)
+        pauseChunkPlayback();
+        playIcon.style.display = 'inline';
+        pauseIcon.style.display = 'none';
+        target.classList.remove('playing');
+      }
+      return;
     }
 
     if (audioElement.paused) {
@@ -779,24 +1536,169 @@ historyList.addEventListener("click", async (e) => {
       currentlyPlayingButton = target;
     } else {
       audioElement.pause();
+      stopChunkPlayback(); // Stop chunk playback if active
       playIcon.style.display = 'inline';
       pauseIcon.style.display = 'none';
       target.classList.remove('playing');
     }
   } else if (target.classList.contains("download-btn")) {
     const key = target.dataset.key;
-    const recording = await window.StorageUtils.getRecording(key);
+    const recordingId = target.dataset.recordingId;
 
-    const downloadLink = document.createElement("a");
-    downloadLink.href = recording.data;
-    downloadLink.download = `recording-${new Date(recording.timestamp).toISOString()}.webm`;
-    downloadLink.click();
+    // Show loading state
+    const originalIcon = target.innerHTML;
+    target.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    target.disabled = true;
+
+    try {
+      await downloadRecording(key, recordingId);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Download failed: ' + error.message);
+    } finally {
+      target.innerHTML = originalIcon;
+      target.disabled = false;
+    }
   } else if (target.classList.contains("delete-btn") && !target.classList.contains("delete-processed-btn")) {
     const confirmed = await showDeleteConfirmModal('Are you sure you want to delete this recording? This action cannot be undone.');
     if (confirmed) {
       const key = target.dataset.key;
+
+      // Delete the main recording
       await window.StorageUtils.deleteRecording(key);
+
+      // Also delete all associated chunks
+      const allRecordings = await window.StorageUtils.getAllRecordings();
+      const chunks = allRecordings.filter(
+        r => r.source === 'recording-chunk' && r.parentRecordingId === key
+      );
+
+      for (const chunk of chunks) {
+        await window.StorageUtils.deleteRecording(chunk.key);
+      }
+
+      // Clear any transcription state for this recording
+      if (window.transcriptionService && window.transcriptionService.clearTranscriptionState) {
+        await window.transcriptionService.clearTranscriptionState(key);
+      }
+
+      console.log(`Deleted recording ${key} and ${chunks.length} associated chunks`);
       loadHistory();
+    }
+  }
+});
+
+// Click handler for progress bar seeking
+historyList.addEventListener("click", async (e) => {
+  const progressBar = e.target.closest('.progress-bar.seekable');
+  if (!progressBar) return;
+
+  const audioId = progressBar.dataset.audioId;
+  const recordingKey = progressBar.dataset.recordingKey;
+  const audioElement = document.getElementById(audioId);
+
+  if (!audioElement) return;
+
+  // Calculate click position as percentage
+  const rect = progressBar.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const percentage = Math.max(0, Math.min(1, clickX / rect.width));
+
+  // Determine total duration
+  let totalDuration;
+  let recording = null;
+  if (chunkPlaybackState && chunkPlaybackState.audioElement === audioElement) {
+    totalDuration = chunkPlaybackState.totalDuration;
+  } else {
+    // Check if audio needs WAV conversion first (PCM recording)
+    const srcIsValid = audioElement.src && (audioElement.src.startsWith('blob:') || audioElement.src.startsWith('data:'));
+    if (audioElement.dataset.needsWavConversion === 'true' && !srcIsValid) {
+      console.warn('Audio needs WAV conversion before seeking. Play it first to enable seeking.');
+      return;
+    }
+
+    // Try to get duration from stored data attribute first (set after WAV conversion)
+    if (audioElement.dataset.actualDuration) {
+      totalDuration = parseFloat(audioElement.dataset.actualDuration);
+      console.log('Using cached duration from dataset:', totalDuration);
+    } else {
+      totalDuration = audioElement.duration;
+      console.log('Audio duration from element:', totalDuration, 'src:', audioElement.src ? audioElement.src.substring(0, 50) : 'none');
+    }
+
+    // Handle Infinity duration (continuous WebM recording) or NaN
+    if (!isFinite(totalDuration) || isNaN(totalDuration) || totalDuration === 0) {
+      // Try to get duration from recording metadata
+      try {
+        recording = await window.StorageUtils.getRecording(recordingKey);
+        console.log('Fetched recording for seek:', recording);
+        if (recording && typeof recording.duration === 'number' && recording.duration > 0) {
+          totalDuration = recording.duration;
+          console.log('Using stored duration:', totalDuration);
+        }
+      } catch (err) {
+        console.warn('Could not get recording duration:', err);
+      }
+    }
+  }
+
+  if (!totalDuration || isNaN(totalDuration) || !isFinite(totalDuration) || totalDuration === 0) {
+    console.warn('Cannot seek: duration unknown or infinite', { totalDuration, recordingKey });
+    return;
+  }
+
+  const targetTime = percentage * totalDuration;
+  console.log(`Seeking to ${percentage * 100}% = ${targetTime.toFixed(2)}s`);
+
+  // Update progress bar immediately for visual feedback
+  const progressFill = progressBar.querySelector('.progress-fill');
+  if (progressFill) {
+    progressFill.style.width = `${percentage * 100}%`;
+  }
+
+  // Handle chunked playback
+  if (chunkPlaybackState && chunkPlaybackState.audioElement === audioElement) {
+    await seekChunkedPlayback(targetTime);
+
+    // Update play button UI since seeking auto-plays
+    if (chunkPlaybackState && chunkPlaybackState.playButton) {
+      const playIcon = chunkPlaybackState.playButton.querySelector('.play-icon');
+      const pauseIcon = chunkPlaybackState.playButton.querySelector('.pause-icon');
+      if (playIcon && pauseIcon) {
+        playIcon.style.display = 'none';
+        pauseIcon.style.display = 'inline';
+        chunkPlaybackState.playButton.classList.add('playing');
+      }
+      currentlyPlayingAudio = audioElement;
+      currentlyPlayingButton = chunkPlaybackState.playButton;
+    }
+  } else {
+    // Regular audio seek
+    console.log(`Setting audio currentTime to ${targetTime}, current src: ${audioElement.src ? 'exists' : 'none'}, readyState: ${audioElement.readyState}`);
+
+    // Ensure audio is loaded before seeking
+    if (audioElement.readyState < 1) {
+      console.warn('Audio not ready for seeking, loading first...');
+      audioElement.load();
+      await new Promise(resolve => {
+        audioElement.addEventListener('loadedmetadata', resolve, { once: true });
+        // Timeout fallback
+        setTimeout(resolve, 2000);
+      });
+    }
+
+    try {
+      audioElement.currentTime = targetTime;
+      console.log(`Seek completed, new currentTime: ${audioElement.currentTime}`);
+
+      // Update current time display
+      const recordingId = audioId.replace('audio-', '');
+      const currentTimeElement = document.getElementById(`current-time-${recordingId}`);
+      if (currentTimeElement) {
+        currentTimeElement.textContent = formatDuration(targetTime);
+      }
+    } catch (err) {
+      console.error('Error seeking:', err);
     }
   }
 });
@@ -858,55 +1760,44 @@ async function recoverIncompleteRecordings() {
           // Sort chunks by chunk number
           parentChunks.sort((a, b) => a.chunkNumber - b.chunkNumber);
 
-          // Convert data URLs back to blobs and merge (without fetch to avoid CSP issues)
-          const blobs = parentChunks.map(chunk => dataURLtoBlob(chunk.data));
-          const mergedBlob = new Blob(blobs, { type: "audio/webm" });
+          // Get the original timestamp from the parent ID
+          const timestamp = parseInt(parentId.replace('recording-', ''));
 
-          console.log(`Recovered ${parentChunks.length} chunks into ${(mergedBlob.size / 1024 / 1024).toFixed(2)} MB`);
+          // Calculate duration and total size from chunks
+          const lastChunk = parentChunks[parentChunks.length - 1];
+          const estimatedDuration = lastChunk.chunkTimestamp
+            ? Math.floor((lastChunk.chunkTimestamp - timestamp) / 1000)
+            : parentChunks.length * 60; // Fallback: estimate 60 seconds per chunk
 
-          // Convert merged blob to data URL
-          const reader = new FileReader();
-          await new Promise((resolve, reject) => {
-            reader.onload = async () => {
-              try {
-                // Get the original timestamp from the parent ID
-                const timestamp = parseInt(parentId.replace('recording-', ''));
+          const totalSize = parentChunks.reduce((sum, chunk) => {
+            // Calculate size from data URL if chunkSize not available
+            const size = chunk.chunkSize || (chunk.data.length * 0.75); // Approximate base64 size
+            return sum + size;
+          }, 0);
 
-                // Calculate duration from chunks
-                // Each chunk is approximately 60 seconds, use the last chunk's timestamp
-                const lastChunk = parentChunks[parentChunks.length - 1];
-                const estimatedDuration = lastChunk.chunkTimestamp
-                  ? Math.floor((lastChunk.chunkTimestamp - timestamp) / 1000)
-                  : parentChunks.length * 60; // Fallback: estimate 60 seconds per chunk
+          console.log(`Recovering ${parentChunks.length} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB total)`);
 
-                // Save the recovered recording
-                const finalKey = await window.StorageUtils.saveRecording(reader.result, {
-                  source: 'recording',
-                  timestamp: timestamp,
-                  duration: estimatedDuration,
-                  fileSize: mergedBlob.size,
-                  mimeType: 'audio/webm',
-                  chunksCount: parentChunks.length,
-                  recovered: true
-                });
+          // Create a metadata record (no need to merge chunks - history.js handles playback)
+          const placeholderData = 'data:audio/webm;base64,';
 
-                console.log('Recovered recording saved with key:', finalKey);
+          // Save the recovered recording metadata
+          const dbModule = await import('./utils/indexeddb.js').then(m => m.default);
+          await dbModule.init();
 
-                // Delete all chunks to free up space
-                for (const chunk of parentChunks) {
-                  await window.StorageUtils.deleteRecording(chunk.key);
-                }
-
-                console.log('Recovery chunks cleaned up successfully');
-                resolve();
-              } catch (error) {
-                console.error('Error saving recovered recording:', error);
-                reject(error);
-              }
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(mergedBlob);
+          await dbModule.saveRecording(parentId, {
+            key: parentId, // Use same key as parent ID so chunks can be found
+            data: placeholderData, // Placeholder, actual audio is in chunks
+            source: 'recording',
+            timestamp: timestamp,
+            duration: estimatedDuration,
+            fileSize: totalSize,
+            mimeType: 'audio/webm',
+            chunksCount: parentChunks.length,
+            isChunked: true, // Flag to indicate this uses chunks for playback
+            recovered: true
           });
+
+          console.log(`Recovered recording metadata saved with ${parentChunks.length} chunks`);
 
         } catch (error) {
           console.error(`Failed to recover recording ${parentId}:`, error);
@@ -985,6 +1876,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Auto-refresh removed - it causes page flickering
   // Users can manually refresh the page to see chunk updates
+
+  // Listen for recording-stopped message to reload history
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'recording-stopped') {
+      console.log('Recording stopped - reloading history');
+      loadHistory();
+    }
+  });
 
   // Create transcription service instance using factory
   if (typeof TranscriptionServiceFactory !== 'undefined') {
@@ -1497,12 +2396,20 @@ async function showPostProcessingUI(recordingId) {
         <div style="padding: 20px; text-align: center; color: #999;">
           <i class="fas fa-exclamation-circle" style="font-size: 32px; margin-bottom: 12px;"></i>
           <p>No prompts available. Please add custom prompts in Settings.</p>
-          <button class="process-run-btn" style="margin-top: 12px;" onclick="chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') })">
+          <button class="process-run-btn open-settings-btn" style="margin-top: 12px;">
             <i class="fas fa-cog"></i>
             Open Settings
           </button>
         </div>
       `;
+
+      // Add event listener for the settings button
+      const openSettingsBtn = postProcessingContent.querySelector('.open-settings-btn');
+      if (openSettingsBtn) {
+        openSettingsBtn.addEventListener('click', () => {
+          chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+        });
+      }
       postProcessingSection.style.display = 'block';
       return;
     }

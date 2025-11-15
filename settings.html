@@ -128,6 +128,27 @@
             </div>
           </div>
         </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="audioQuality">Recording Quality</label>
+            <p class="setting-description">
+              Higher quality = better audio, larger file size
+            </p>
+          </div>
+          <div class="setting-control">
+            <select id="audioQuality" class="select-input">
+              <option value="16000">Very Low (16 kHz) - Smallest files</option>
+              <option value="22050">Low (22 kHz)</option>
+              <option value="32000">Medium (32 kHz)</option>
+              <option value="44100">High (44.1 kHz) - CD Quality</option>
+              <option value="48000">Very High (48 kHz) - Studio Quality</option>
+            </select>
+            <div class="quality-info" style="margin-top: 8px; font-size: 12px; color: #666;">
+              <div id="qualityDescription"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Storage Settings -->

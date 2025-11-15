@@ -7,6 +7,7 @@ const DEFAULT_CONFIG = {
   // Audio settings
   tabGain: 1.0,
   micGain: 1.5,
+  audioQuality: 48000, // Sample rate in Hz (16000, 22050, 32000, 44100, 48000)
 
   // Transcription settings
   transcriptionService: 'gemini',
@@ -36,6 +37,20 @@ class ConfigManager {
    */
   async load() {
     try {
+      // Check if chrome API is available
+      if (typeof chrome === 'undefined' || !chrome.storage) {
+        console.warn('Chrome storage API not available, using defaults');
+        this.loaded = true;
+        return this.config;
+      }
+
+      // Check if StorageKeys is defined
+      if (typeof StorageKeys === 'undefined') {
+        console.warn('StorageKeys not defined, using defaults');
+        this.loaded = true;
+        return this.config;
+      }
+
       const result = await chrome.storage.local.get(StorageKeys.USER_SETTINGS);
       if (result[StorageKeys.USER_SETTINGS]) {
         this.config = { ...DEFAULT_CONFIG, ...result[StorageKeys.USER_SETTINGS] };

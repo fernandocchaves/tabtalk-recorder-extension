@@ -269,44 +269,77 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         await this.initialize(onProgress);
       }
 
-      // Get all chunks for this recording from IndexedDB
-      const recordingChunks = await this._getRecordingChunks(recordingKey);
+      // Get recording metadata to check if it's PCM format
+      const metadata = await this._getRecordingMetadata(recordingKey);
 
-      if (!recordingChunks || recordingChunks.length === 0) {
+      // Get all chunks for this recording from IndexedDB
+      const rawChunks = await this._getRecordingChunks(recordingKey);
+
+      console.log(`[CHUNKED TRANSCRIPTION] Found ${rawChunks.length} chunks for ${recordingKey}`);
+
+      if (!rawChunks || rawChunks.length === 0) {
         throw new Error('No audio chunks found for this recording');
       }
 
-      // Group multiple 1-minute recording chunks into 5-minute transcription chunks
-      const CHUNKS_PER_GROUP = 5; // 5 x 1-minute = 5 minutes per transcription
-      const groupedChunks = this._groupChunks(recordingChunks, CHUNKS_PER_GROUP);
-      const totalGroups = groupedChunks.length;
+      // Check if chunks are PCM format (new continuous recording system)
+      let recordingChunks;
+      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || metadata?.isPcm;
+
+      console.log(`[CHUNKED TRANSCRIPTION] Format detection: rawChunks[0].format="${rawChunks[0]?.format}", metadata.isPcm=${metadata?.isPcm}, isPcmFormat=${isPcmFormat}`);
+
+      if (isPcmFormat) {
+        console.log(`[CHUNKED TRANSCRIPTION] ✓ Detected PCM format, converting to WAV segments using TRANSCRIPTION_CHUNK_INTERVAL_MS`);
+        if (onProgress) {
+          onProgress('Converting PCM audio to transcription segments...', 0, 1);
+        }
+        // Convert PCM chunks to time-based WAV segments for transcription
+        recordingChunks = await this._preparePcmTranscriptionSegments(recordingKey, rawChunks, metadata);
+      } else {
+        // Use WebM chunks directly (legacy format)
+        console.log(`[CHUNKED TRANSCRIPTION] ⚠ Legacy WebM format detected - using old chunking (not time-based)`);
+        recordingChunks = rawChunks;
+      }
+
+      // Transcribe each chunk individually (no merging to avoid audio corruption)
+      const totalChunks = recordingChunks.length;
       const transcriptions = [];
       const RATE_LIMIT_DELAY = 4000; // 4 seconds between requests to stay under 15/min
 
+      console.log(`[CHUNKED TRANSCRIPTION] Will transcribe ${totalChunks} ${isPcmFormat ? 'WAV segments' : 'chunks'} individually`);
+
       if (onProgress) {
-        onProgress(`Starting transcription of ${totalGroups} segments (${recordingChunks.length} chunks)...`, 0, totalGroups);
+        onProgress(`Starting transcription of ${totalChunks} segments...`, 0, totalChunks);
       }
 
-      // Process each group
-      for (let i = 0; i < groupedChunks.length; i++) {
-        const group = groupedChunks[i];
+      // Process each chunk individually
+      for (let i = 0; i < recordingChunks.length; i++) {
+        const chunk = recordingChunks[i];
+        const requestStartTime = Date.now();
 
         if (onProgress) {
-          onProgress(`Transcribing segment ${i + 1}/${totalGroups}...`, i, totalGroups);
+          onProgress(`Transcribing segment ${i + 1}/${totalChunks}...`, i, totalChunks);
         }
 
         try {
-          // Merge chunks in this group and transcribe together
-          const mergedAudio = await this._mergeAudioChunks(group);
-          const groupTranscription = await this._transcribeSingleChunk(mergedAudio, i + 1);
-          transcriptions.push(groupTranscription);
+          // Transcribe individual chunk (each chunk is a valid audio file)
+          const mimeType = isPcmFormat ? 'audio/wav' : 'audio/webm';
+          const sizeInMB = (chunk.data.length / (1024 * 1024)).toFixed(2);
+          console.log(`[CHUNKED TRANSCRIPTION] Segment ${i + 1}: size=${sizeInMB} MB (${chunk.data.length} bytes), chunkNumber=${chunk.chunkNumber}, format=${mimeType}`);
+          const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType);
+          console.log(`[CHUNKED TRANSCRIPTION] Segment ${i + 1} transcription length: ${chunkTranscription.length} chars`);
+          transcriptions.push(chunkTranscription);
 
           // Save partial progress
-          await this._saveTranscriptionProgress(recordingKey, i, groupTranscription);
+          await this._saveTranscriptionProgress(recordingKey, i, chunkTranscription);
 
-          // Rate limiting: wait between requests (except for last group)
-          if (i < groupedChunks.length - 1) {
-            await this._sleep(RATE_LIMIT_DELAY);
+          // Rate limiting: ensure at least RATE_LIMIT_DELAY between request starts
+          if (i < recordingChunks.length - 1) {
+            const elapsedTime = Date.now() - requestStartTime;
+            const remainingDelay = Math.max(0, RATE_LIMIT_DELAY - elapsedTime);
+            if (remainingDelay > 0) {
+              console.log(`[CHUNKED TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
+              await this._sleep(remainingDelay);
+            }
           }
 
         } catch (error) {
@@ -315,7 +348,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
           // Save the error state
           await this._saveTranscriptionProgress(recordingKey, i, null, error.message);
 
-          throw new Error(`Failed at segment ${i + 1}/${totalGroups}: ${error.message}`);
+          throw new Error(`Failed at segment ${i + 1}/${totalChunks}: ${error.message}`);
         }
       }
 
@@ -323,7 +356,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       const finalTranscription = transcriptions.join(' ');
 
       if (onProgress) {
-        onProgress('Transcription complete!', totalGroups, totalGroups, finalTranscription);
+        onProgress('Transcription complete!', totalChunks, totalChunks, finalTranscription);
       }
 
       return finalTranscription;
@@ -353,48 +386,74 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         throw new Error('No transcription state found. Start a new transcription instead.');
       }
 
-      const recordingChunks = await this._getRecordingChunks(recordingKey);
-      const CHUNKS_PER_GROUP = 5;
-      const groupedChunks = this._groupChunks(recordingChunks, CHUNKS_PER_GROUP);
-      const totalGroups = groupedChunks.length;
+      // Get recording metadata to check if it's PCM format
+      const metadata = await this._getRecordingMetadata(recordingKey);
+
+      // Get all chunks for this recording from IndexedDB
+      const rawChunks = await this._getRecordingChunks(recordingKey);
+
+      // Check if chunks are PCM format (new continuous recording system)
+      let recordingChunks;
+      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || metadata?.isPcm;
+
+      if (isPcmFormat) {
+        console.log(`[RESUME TRANSCRIPTION] Detected PCM format, converting to WAV segments`);
+        if (onProgress) {
+          onProgress('Converting PCM audio to transcription segments...', 0, 1);
+        }
+        // Convert PCM chunks to time-based WAV segments for transcription
+        recordingChunks = await this._preparePcmTranscriptionSegments(recordingKey, rawChunks, metadata);
+      } else {
+        // Use WebM chunks directly (legacy format)
+        recordingChunks = rawChunks;
+      }
+
+      const totalChunks = recordingChunks.length;
       const transcriptions = [...state.completedTranscriptions];
-      const startFromGroup = state.lastCompletedChunk + 1;
+      const startFromChunk = state.lastCompletedChunk + 1;
       const RATE_LIMIT_DELAY = 4000;
 
       if (onProgress) {
-        onProgress(`Resuming from segment ${startFromGroup + 1}/${totalGroups}...`, startFromGroup, totalGroups);
+        onProgress(`Resuming from segment ${startFromChunk + 1}/${totalChunks}...`, startFromChunk, totalChunks);
       }
 
-      // Process remaining groups
-      for (let i = startFromGroup; i < groupedChunks.length; i++) {
-        const group = groupedChunks[i];
+      // Process remaining chunks individually
+      for (let i = startFromChunk; i < recordingChunks.length; i++) {
+        const chunk = recordingChunks[i];
+        const requestStartTime = Date.now();
 
         if (onProgress) {
-          onProgress(`Transcribing segment ${i + 1}/${totalGroups}...`, i, totalGroups);
+          onProgress(`Transcribing segment ${i + 1}/${totalChunks}...`, i, totalChunks);
         }
 
         try {
-          const mergedAudio = await this._mergeAudioChunks(group);
-          const groupTranscription = await this._transcribeSingleChunk(mergedAudio, i + 1);
-          transcriptions.push(groupTranscription);
+          const mimeType = isPcmFormat ? 'audio/wav' : 'audio/webm';
+          const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType);
+          transcriptions.push(chunkTranscription);
 
-          await this._saveTranscriptionProgress(recordingKey, i, groupTranscription);
+          await this._saveTranscriptionProgress(recordingKey, i, chunkTranscription);
 
-          if (i < groupedChunks.length - 1) {
-            await this._sleep(RATE_LIMIT_DELAY);
+          // Rate limiting: ensure at least RATE_LIMIT_DELAY between request starts
+          if (i < recordingChunks.length - 1) {
+            const elapsedTime = Date.now() - requestStartTime;
+            const remainingDelay = Math.max(0, RATE_LIMIT_DELAY - elapsedTime);
+            if (remainingDelay > 0) {
+              console.log(`[RESUME TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
+              await this._sleep(remainingDelay);
+            }
           }
 
         } catch (error) {
           console.error(`Error transcribing segment ${i + 1}:`, error);
           await this._saveTranscriptionProgress(recordingKey, i, null, error.message);
-          throw new Error(`Failed at segment ${i + 1}/${totalGroups}: ${error.message}`);
+          throw new Error(`Failed at segment ${i + 1}/${totalChunks}: ${error.message}`);
         }
       }
 
       const finalTranscription = transcriptions.join(' ');
 
       if (onProgress) {
-        onProgress('Transcription complete!', totalGroups, totalGroups, finalTranscription);
+        onProgress('Transcription complete!', totalChunks, totalChunks, finalTranscription);
       }
 
       return finalTranscription;
@@ -430,6 +489,199 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       request.onerror = () => reject(request.error);
     });
+  }
+
+  /**
+   * Get recording metadata from IndexedDB
+   * @private
+   */
+  async _getRecordingMetadata(recordingKey) {
+    const dbManager = await import('../utils/indexeddb.js').then(m => m.default);
+    await dbManager.init();
+
+    return new Promise((resolve, reject) => {
+      const transaction = dbManager.db.transaction(['recordings'], 'readonly');
+      const objectStore = transaction.objectStore('recordings');
+      const request = objectStore.get(recordingKey);
+
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Prepare transcription segments from PCM chunks
+   * Groups PCM data into time-based segments suitable for transcription
+   * @private
+   */
+  async _preparePcmTranscriptionSegments(recordingKey, pcmChunks, metadata) {
+    const originalSampleRate = metadata.sampleRate || 48000;
+    const numberOfChannels = metadata.numberOfChannels || 1;
+    const targetSampleRate = 16000; // Always downsample to 16kHz for transcription
+
+    // Get transcription chunk interval from constants (default 60 seconds)
+    console.log('[DEBUG] window.RECORDING_CONSTANTS:', window.RECORDING_CONSTANTS);
+    console.log('[DEBUG] TRANSCRIPTION_CHUNK_INTERVAL_MS:', window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS);
+
+    const chunkIntervalMs = window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
+
+    // Calculate samples per segment based on TARGET sample rate (16kHz) for accurate file sizing
+    const targetSamplesPerSegment = Math.floor((chunkIntervalMs / 1000) * targetSampleRate);
+    // Convert to original sample rate for splitting the source data
+    const originalSamplesPerSegment = Math.floor((chunkIntervalMs / 1000) * originalSampleRate);
+
+    console.log(`[PCM TRANSCRIPTION] Original rate: ${originalSampleRate} Hz, Target rate: ${targetSampleRate} Hz`);
+    console.log(`[PCM TRANSCRIPTION] Chunk interval: ${chunkIntervalMs}ms`);
+    console.log(`[PCM TRANSCRIPTION] Samples per segment: ${originalSamplesPerSegment} (original) -> ${targetSamplesPerSegment} (downsampled)`);
+
+    // First, concatenate all PCM chunks into one continuous buffer
+    const totalSamples = pcmChunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
+    const allPcmData = new Float32Array(totalSamples);
+
+    let offset = 0;
+    for (const chunk of pcmChunks) {
+      // Decode base64 to Float32Array
+      const base64Data = chunk.data.split(',')[1];
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const pcmData = new Float32Array(bytes.buffer);
+      allPcmData.set(pcmData, offset);
+      offset += pcmData.length;
+    }
+
+    console.log(`[PCM TRANSCRIPTION] Total PCM samples: ${totalSamples} (${(totalSamples / originalSampleRate).toFixed(2)} seconds)`);
+
+    // Split into transcription segments based on original sample rate
+    const segments = [];
+    let segmentStart = 0;
+    let segmentNumber = 0;
+
+    while (segmentStart < totalSamples) {
+      const segmentEnd = Math.min(segmentStart + originalSamplesPerSegment, totalSamples);
+      const segmentData = allPcmData.slice(segmentStart, segmentEnd);
+
+      // Convert PCM segment to WAV (will downsample to 16kHz inside)
+      const wavDataUrl = this._pcmFloat32ToWavDataUrl(segmentData, originalSampleRate, numberOfChannels);
+
+      segments.push({
+        data: wavDataUrl,
+        chunkNumber: segmentNumber,
+        samplesCount: segmentData.length,
+        duration: segmentData.length / originalSampleRate
+      });
+
+      console.log(`[PCM TRANSCRIPTION] Segment ${segmentNumber}: ${segmentData.length} samples (${(segmentData.length / originalSampleRate).toFixed(2)}s)`);
+
+      segmentStart = segmentEnd;
+      segmentNumber++;
+    }
+
+    console.log(`[PCM TRANSCRIPTION] Created ${segments.length} transcription segments`);
+    return segments;
+  }
+
+  /**
+   * Convert PCM Float32 data to WAV data URL
+   * Always downsamples to 16kHz for smaller file size (optimal for speech transcription)
+   * @private
+   */
+  _pcmFloat32ToWavDataUrl(pcmData, sampleRate, numberOfChannels) {
+    // Always use 16kHz for transcription regardless of recording quality
+    // This reduces file size significantly while maintaining speech quality
+    const targetSampleRate = 16000;
+    const downsampledData = this._downsample(pcmData, sampleRate, targetSampleRate);
+
+    console.log(`[WAV CONVERSION] Original sample rate: ${sampleRate} Hz, Target: ${targetSampleRate} Hz, Samples: ${pcmData.length} -> ${downsampledData.length}`);
+
+    const bytesPerSample = 2; // 16-bit audio
+    const blockAlign = numberOfChannels * bytesPerSample;
+    const byteRate = targetSampleRate * blockAlign;
+    const dataSize = downsampledData.length * bytesPerSample;
+    const headerSize = 44;
+    const totalSize = headerSize + dataSize;
+
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    // RIFF header
+    this._writeString(view, 0, 'RIFF');
+    view.setUint32(4, totalSize - 8, true);
+    this._writeString(view, 8, 'WAVE');
+
+    // fmt chunk
+    this._writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true); // chunk size
+    view.setUint16(20, 1, true); // audio format (PCM)
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, targetSampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bytesPerSample * 8, true); // bits per sample
+
+    // data chunk
+    this._writeString(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Write PCM samples (convert Float32 to Int16)
+    let writeOffset = 44;
+    for (let i = 0; i < downsampledData.length; i++) {
+      const sample = Math.max(-1, Math.min(1, downsampledData[i]));
+      const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(writeOffset, int16, true);
+      writeOffset += 2;
+    }
+
+    // Convert to base64 data URL
+    const uint8Array = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    const base64 = btoa(binary);
+
+    return `data:audio/wav;base64,${base64}`;
+  }
+
+  /**
+   * Downsample audio data using simple linear interpolation
+   * @private
+   */
+  _downsample(pcmData, fromSampleRate, toSampleRate) {
+    if (fromSampleRate === toSampleRate) {
+      return pcmData;
+    }
+
+    const ratio = fromSampleRate / toSampleRate;
+    const outputLength = Math.floor(pcmData.length / ratio);
+    const downsampled = new Float32Array(outputLength);
+
+    for (let i = 0; i < outputLength; i++) {
+      const sourceIndex = i * ratio;
+      const index0 = Math.floor(sourceIndex);
+      const index1 = Math.min(index0 + 1, pcmData.length - 1);
+      const fraction = sourceIndex - index0;
+
+      // Linear interpolation
+      downsampled[i] = pcmData[index0] * (1 - fraction) + pcmData[index1] * fraction;
+    }
+
+    return downsampled;
+  }
+
+  /**
+   * Write string to DataView
+   * @private
+   */
+  _writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
   }
 
   /**
@@ -493,7 +745,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    * Transcribe a single audio segment (may contain multiple merged chunks)
    * @private
    */
-  async _transcribeSingleChunk(audioDataUrl, segmentNumber) {
+  async _transcribeSingleChunk(audioDataUrl, segmentNumber, mimeType = 'audio/webm') {
     const base64Audio = audioDataUrl.split(',')[1];
 
     const response = await fetch(
@@ -507,11 +759,11 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
           contents: [{
             parts: [
               {
-                text: `Transcribe this audio segment (part ${segmentNumber} of a longer recording). Provide the complete transcription of all spoken words in this segment. Return only the transcribed text without any prefixes, explanations, or meta-commentary. If this segment continues mid-sentence from a previous segment, start transcribing from where the audio begins.`
+                text: `Transcribe the audio exactly as spoken. This is segment ${segmentNumber} from a longer recording that has been split into 1-minute chunks. Transcribe ONLY what is actually said in this audio segment - do not add commentary, explanations, or make assumptions about missing context. If the segment starts mid-word or mid-sentence, transcribe from exactly where it begins. Return only the raw transcription text.`
               },
               {
                 inline_data: {
-                  mime_type: 'audio/webm',
+                  mime_type: mimeType,
                   data: base64Audio
                 }
               }
