@@ -320,11 +320,9 @@ async function downloadRecording(recordingKey, recordingId) {
     return;
   }
 
-  // Fallback: Check for PCM chunks (for crash recovery or old format)
+  // Check for PCM chunks
   if (recording.isChunked || recording.chunksCount > 0) {
-    const chunks = allRecordings
-      .filter(r => r.source === 'recording-chunk' && r.parentRecordingId === recordingKey)
-      .sort((a, b) => a.chunkNumber - b.chunkNumber);
+    const chunks = await window.StorageUtils.getRecordingChunksWithData(recordingKey);
 
     if (chunks.length === 0) {
       throw new Error('No audio chunks found for this recording');
@@ -332,7 +330,7 @@ async function downloadRecording(recordingKey, recordingId) {
 
     console.log(`Found ${chunks.length} chunks for conversion...`);
 
-    // Check if chunks are PCM format
+    // PCM format - convert to WAV
     const isPcmFormat = chunks[0].format === 'pcm-float32';
 
     if (isPcmFormat) {
@@ -361,22 +359,52 @@ async function downloadRecording(recordingKey, recordingId) {
   }
 }
 
-// Convert PCM Float32 chunks to WAV file
+// Convert PCM Float32 chunks to WAV file (memory-efficient streaming)
 async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targetSampleRate = null) {
-  // Calculate total samples
+  const finalSampleRate = targetSampleRate || sampleRate;
   const totalSamples = chunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
 
-  console.log(`Converting ${chunks.length} PCM chunks (${totalSamples} samples) to WAV...`);
+  // Calculate final sample count after downsampling if needed
+  const ratio = sampleRate / finalSampleRate;
+  const finalSampleCount = Math.floor(totalSamples / ratio);
 
-  // Concatenate all PCM data
-  const allPcmData = new Float32Array(totalSamples);
-  let offset = 0;
+  console.log(`Converting ${chunks.length} PCM chunks (${totalSamples} samples @ ${sampleRate}Hz -> ${finalSampleCount} samples @ ${finalSampleRate}Hz) to WAV...`);
 
-  for (let i = 0; i < chunks.length; i++) {
-    console.log(`Loading PCM chunk ${i + 1}/${chunks.length}...`);
+  // Prepare WAV header
+  const bytesPerSample = 2; // 16-bit
+  const blockAlign = numberOfChannels * bytesPerSample;
+  const byteRate = finalSampleRate * blockAlign;
+  const dataSize = finalSampleCount * bytesPerSample;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const arrayBuffer = new ArrayBuffer(totalSize);
+  const view = new DataView(arrayBuffer);
+
+  // Write WAV header once
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, finalSampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Process chunks and write audio data directly to WAV (memory-efficient)
+  let writeOffset = 44;
+  let totalProcessedSamples = 0;
+
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    console.log(`Processing PCM chunk ${chunkIdx + 1}/${chunks.length}...`);
 
     // Decode base64 data to Float32Array
-    const base64Data = chunks[i].data.split(',')[1];
+    const base64Data = chunks[chunkIdx].data.split(',')[1];
     const binaryString = atob(base64Data);
     const bytes = new Uint8Array(binaryString.length);
     for (let j = 0; j < binaryString.length; j++) {
@@ -384,22 +412,54 @@ async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targe
     }
 
     const pcmData = new Float32Array(bytes.buffer);
-    allPcmData.set(pcmData, offset);
-    offset += pcmData.length;
+
+    // Write samples to WAV with optional downsampling
+    if (targetSampleRate && targetSampleRate !== sampleRate) {
+      // Downsample: for each chunk, determine which output samples to write
+      const chunkStartSample = totalProcessedSamples;
+      const chunkEndSample = totalProcessedSamples + pcmData.length;
+
+      const outputStartIndex = Math.floor(chunkStartSample / ratio);
+      const outputEndIndex = Math.floor(chunkEndSample / ratio);
+
+      for (let outputIdx = outputStartIndex; outputIdx < outputEndIndex && outputIdx < finalSampleCount; outputIdx++) {
+        // Calculate source position in the original sample rate
+        const sourcePosition = outputIdx * ratio - chunkStartSample;
+
+        if (sourcePosition >= 0 && sourcePosition < pcmData.length - 1) {
+          // Linear interpolation
+          const index0 = Math.floor(sourcePosition);
+          const index1 = Math.min(index0 + 1, pcmData.length - 1);
+          const fraction = sourcePosition - index0;
+          const sample = pcmData[index0] * (1 - fraction) + pcmData[index1] * fraction;
+
+          const clamped = Math.max(-1, Math.min(1, sample));
+          const int16 = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+          view.setInt16(writeOffset, int16, true);
+          writeOffset += 2;
+        }
+      }
+
+      totalProcessedSamples += pcmData.length;
+    } else {
+      // Direct write without downsampling
+      for (let i = 0; i < pcmData.length; i++) {
+        const sample = Math.max(-1, Math.min(1, pcmData[i]));
+        const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        view.setInt16(writeOffset, int16, true);
+        writeOffset += 2;
+      }
+      totalProcessedSamples += pcmData.length;
+    }
+
+    // Allow garbage collection between chunks
+    if (chunkIdx % 5 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
   }
 
-  // Apply downsampling if target sample rate is different
-  let finalPcmData = allPcmData;
-  let finalSampleRate = sampleRate;
-
-  if (targetSampleRate && targetSampleRate !== sampleRate) {
-    console.log(`Downsampling from ${sampleRate} Hz to ${targetSampleRate} Hz...`);
-    finalPcmData = downsamplePcm(allPcmData, sampleRate, targetSampleRate);
-    finalSampleRate = targetSampleRate;
-  }
-
-  // Convert to WAV
-  return pcmFloat32ToWav(finalPcmData, finalSampleRate, numberOfChannels);
+  console.log(`Completed WAV conversion: ${totalProcessedSamples} samples processed, ${writeOffset} bytes written`);
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
 }
 
 // Downsample PCM data from one sample rate to another
@@ -466,51 +526,101 @@ function pcmFloat32ToWav(pcmData, sampleRate, numberOfChannels) {
   return new Blob([arrayBuffer], { type: 'audio/wav' });
 }
 
-// Merge multiple audio chunks into a single WAV file using Web Audio API
+// Merge multiple audio chunks into a single WAV file (memory-efficient)
 async function mergeAudioChunks(chunks) {
   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  const audioBuffers = [];
 
-  // Decode each chunk
-  for (let i = 0; i < chunks.length; i++) {
-    console.log(`Decoding chunk ${i + 1}/${chunks.length}...`);
+  // Decode first chunk to get metadata (sampleRate, channels)
+  console.log(`Decoding first chunk to determine format...`);
+  const firstBlob = dataURLtoBlob(chunks[0].data);
+  const firstArrayBuffer = await firstBlob.arrayBuffer();
+  const firstBuffer = await audioContext.decodeAudioData(firstArrayBuffer);
+
+  const sampleRate = firstBuffer.sampleRate;
+  const numberOfChannels = firstBuffer.numberOfChannels;
+
+  // Calculate total length by decoding all chunks
+  let totalLength = firstBuffer.length;
+  console.log(`Chunk 1: ${firstBuffer.length} samples`);
+
+  for (let i = 1; i < chunks.length; i++) {
     const blob = dataURLtoBlob(chunks[i].data);
     const arrayBuffer = await blob.arrayBuffer();
-
     try {
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      audioBuffers.push(audioBuffer);
+      const buffer = await audioContext.decodeAudioData(arrayBuffer);
+      totalLength += buffer.length;
+      console.log(`Chunk ${i + 1}: ${buffer.length} samples`);
     } catch (error) {
       console.error(`Failed to decode chunk ${i + 1}:`, error);
       throw new Error(`Failed to decode chunk ${i + 1}: ${error.message}`);
     }
   }
 
-  // Calculate total length
-  const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.length, 0);
-  const sampleRate = audioBuffers[0].sampleRate;
-  const numberOfChannels = audioBuffers[0].numberOfChannels;
+  console.log(`Merging ${chunks.length} buffers: ${totalLength} total samples, ${sampleRate}Hz, ${numberOfChannels} channels`);
 
-  console.log(`Merging ${audioBuffers.length} buffers: ${totalLength} samples, ${sampleRate}Hz, ${numberOfChannels} channels`);
+  // Prepare WAV header
+  const bytesPerSample = 2; // 16-bit
+  const blockAlign = numberOfChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = totalLength * bytesPerSample;
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
 
-  // Create merged buffer
-  const mergedBuffer = audioContext.createBuffer(numberOfChannels, totalLength, sampleRate);
+  const arrayBuffer = new ArrayBuffer(totalSize);
+  const view = new DataView(arrayBuffer);
 
-  // Copy data from each buffer
-  let offset = 0;
-  for (const buffer of audioBuffers) {
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const channelData = mergedBuffer.getChannelData(channel);
-      channelData.set(buffer.getChannelData(channel), offset);
+  // Write WAV header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Stream each chunk and write directly to WAV (memory-efficient)
+  let writeOffset = 44;
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`Processing chunk ${i + 1}/${chunks.length}...`);
+
+    const blob = dataURLtoBlob(chunks[i].data);
+    const chunkArrayBuffer = await blob.arrayBuffer();
+
+    try {
+      const buffer = await audioContext.decodeAudioData(chunkArrayBuffer);
+
+      // Write this chunk's data directly to WAV
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = buffer.getChannelData(channel);
+        for (let j = 0; j < channelData.length; j++) {
+          const sample = Math.max(-1, Math.min(1, channelData[j]));
+          const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+          view.setInt16(writeOffset, int16, true);
+          writeOffset += 2;
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to process chunk ${i + 1}:`, error);
+      audioContext.close();
+      throw error;
     }
-    offset += buffer.length;
+
+    // Allow garbage collection between chunks
+    if (i % 5 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
   }
 
-  // Convert to WAV
-  const wavBlob = audioBufferToWav(mergedBuffer);
   audioContext.close();
-
-  return wavBlob;
+  console.log(`Completed merging: ${writeOffset} bytes written`);
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
 }
 
 // Convert AudioBuffer to WAV Blob
@@ -578,9 +688,11 @@ function downloadBlob(blob, filename) {
 }
 
 async function loadHistory() {
-  const allRecordings = await window.StorageUtils.getAllRecordings();
+  // Use metadata-only query for fast loading (doesn't load audio data)
+  const { recordings: finalRecordings, chunkMetadata: chunks } = await window.StorageUtils.getAllRecordingsMetadata();
 
-  console.log('Total recordings:', allRecordings.length);
+  console.log('Total recordings (metadata only):', finalRecordings.length);
+  console.log('Total chunk metadata:', chunks.length);
 
   // Check for active recording from chrome.storage
   const storageData = await chrome.storage.local.get(['activeRecordingId', 'recordingStartTime']);
@@ -618,17 +730,11 @@ async function loadHistory() {
     }
   }
 
-  // Separate final recordings and chunks
-  const finalRecordings = allRecordings.filter(r => r.source !== 'recording-chunk');
-  const chunks = allRecordings.filter(r => r.source === 'recording-chunk');
-
   console.log('Final recordings:', finalRecordings.length);
   console.log('Final recording keys:', finalRecordings.map(r => r.key));
-  console.log('Chunks:', chunks.length);
   if (chunks.length > 0) {
-    console.log('Sample chunk:', chunks[0]);
-    console.log('All chunk keys:', chunks.map(c => c.key));
-    console.log('Chunk sources:', chunks.map(c => ({ key: c.key, source: c.source, parentId: c.parentRecordingId })));
+    console.log('First chunk metadata:', chunks[0]);
+    console.log('Chunk count by parent:', chunks.reduce((acc, c) => { acc[c.parentRecordingId] = (acc[c.parentRecordingId] || 0) + 1; return acc; }, {}));
   }
 
   // Group chunks by parent recording ID
@@ -739,42 +845,36 @@ async function loadHistory() {
     const isUploaded = recording.source === 'upload';
     const isIncomplete = recording.isIncomplete || false;
 
-    console.log(`Displaying recording ${key}: isIncomplete=${isIncomplete}, chunkCount=${recording.chunkCount || 0}, hasChunks=${!!recording.chunks}, duration=${recording.duration}, hasData=${!!recording.data}`);
+    console.log(`Displaying recording ${key}: isIncomplete=${isIncomplete}, chunkCount=${recording.chunkCount || 0}, hasChunks=${!!recording.chunks}, duration=${recording.duration}, dataStripped=${recording._dataStripped}, isPcm=${recording.isPcm}, chunksCount=${recording.chunksCount}, source=${recording.source}`);
     const displayName = isUploaded && recording.filename ? recording.filename : fileName;
     const iconClass = isUploaded ? 'fa-file-audio' : 'fa-microphone';
 
-    // For recordings with chunks (incomplete or chunked), merge for playback
-    // BUT: PCM recordings have WebM preview, so don't merge chunks for them
+    // Modern PCM recordings with chunks - convert to WAV on-demand
+    // Note: Some old recordings may not have isPcm flag set, so we also check if it has chunks but no data
+    const hasChunks = (recording.chunksCount > 0 || recording.chunkCount > 0);
+    const hasNoData = !recording.data || recording.data === 'data:audio/webm;base64,';
+    const isPcmWithChunks = (recording.isPcm && hasChunks) || (hasChunks && hasNoData && !isUploaded);
+
     let audioSrc = null;
-    const needsChunkMerging = (isIncomplete || recording.isChunked) && recording.chunks && recording.chunks.length > 0 && !recording.isPcm;
-    const hasAudio = (recording.data && recording.data !== 'data:audio/webm;base64,') || needsChunkMerging;
-
-    let estimatedDuration = null;
+    let estimatedDuration = recording.duration || null;
     let needsWavConversion = false;
-    if (needsChunkMerging) {
-      // Merge chunks in background for playback
-      // Use placeholder for now, will merge on first play
-      audioSrc = 'pending-merge'; // Special marker
 
-      // Estimate duration from chunks (each chunk is ~60 seconds)
-      const lastChunk = recording.chunks[recording.chunks.length - 1];
-      if (lastChunk.chunkTimestamp && recording.timestamp) {
-        estimatedDuration = Math.floor((lastChunk.chunkTimestamp - recording.timestamp) / 1000);
-      } else {
-        estimatedDuration = recording.chunks.length * 60; // 60 seconds per chunk
-      }
-    } else if (recording.data && recording.data !== 'data:audio/webm;base64,') {
-      // Convert data URL to blob URL for playback (WebM preview for PCM recordings)
-      const blob = dataURLtoBlob(recording.data);
-      audioSrc = URL.createObjectURL(blob);
-
-      // Check if this is a PCM recording that needs WAV conversion for seeking
-      if (recording.isPcm && recording.chunksCount > 0) {
-        // Mark for optional WAV conversion (for seeking capability)
-        needsWavConversion = true;
-        estimatedDuration = recording.duration;
-      }
+    if (isPcmWithChunks) {
+      // PCM recording with chunks - will convert to WAV on play
+      console.log(`  → PCM with chunks detected, will use WAV conversion`);
+      audioSrc = null; // No preview, will convert on play
+      needsWavConversion = true;
+      estimatedDuration = recording.duration;
+    } else if (recording._dataStripped || (recording.data && recording.data !== 'data:audio/webm;base64,')) {
+      // Uploaded file or old recording with data - lazy-load on play
+      console.log(`  → Lazy-load path (dataStripped=${recording._dataStripped}, hasData=${!!recording.data})`);
+      audioSrc = 'pending-load';
+      estimatedDuration = recording.duration;
+    } else {
+      console.log(`  → No audio source determined`);
     }
+
+    const hasAudio = isPcmWithChunks || recording._dataStripped || isUploaded;
 
     recordingCard.innerHTML = `
       <div class="recording-card-main">
@@ -798,8 +898,11 @@ async function loadHistory() {
         </div>
         ${hasAudio ? `
         <div class="audio-player">
-          <audio id="audio-${recordingId}" preload="metadata">
-            ${audioSrc && audioSrc !== 'pending-merge' ? `<source src="${audioSrc}" type="audio/webm">` : ''}
+          <audio id="audio-${recordingId}" preload="metadata"
+                 data-lazy-load="${audioSrc === 'pending-load' ? 'true' : 'false'}"
+                 data-recording-key="${key}"
+                 ${needsWavConversion ? 'data-needs-wav-conversion="true"' : ''}>
+            ${audioSrc && audioSrc !== 'pending-load' ? `<source src="${audioSrc}" type="audio/webm">` : ''}
           </audio>
           <div class="player-controls">
             <button class="play-btn" data-key="${key}" data-audio-id="audio-${recordingId}">
@@ -947,17 +1050,7 @@ async function loadHistory() {
         }
       });
 
-      // Store chunk info for merged playback
-      if (needsChunkMerging) {
-        audioElement.dataset.needsMerge = 'true';
-        audioElement.dataset.recordingKey = key;
-      }
-
-      // Store WAV conversion info for PCM recordings
-      if (needsWavConversion) {
-        audioElement.dataset.needsWavConversion = 'true';
-        audioElement.dataset.recordingKey = key;
-      }
+      // Data attributes are already set in the HTML template, no need to set them here again
 
       audioElement.addEventListener('ended', () => {
         // Playback ended
@@ -1406,6 +1499,12 @@ historyList.addEventListener("click", async (e) => {
     const playIcon = target.querySelector('.play-icon');
     const pauseIcon = target.querySelector('.pause-icon');
 
+    console.log('Play button clicked:', {
+      lazyLoad: audioElement.dataset.lazyLoad,
+      needsWavConversion: audioElement.dataset.needsWavConversion,
+      recordingKey: audioElement.dataset.recordingKey
+    });
+
     // Stop currently playing audio if different
     if (currentlyPlayingAudio && currentlyPlayingAudio !== audioElement) {
       stopChunkPlayback(); // Stop any chunk playback
@@ -1416,6 +1515,53 @@ historyList.addEventListener("click", async (e) => {
         currentlyPlayingButton.querySelector('.pause-icon').style.display = 'none';
         currentlyPlayingButton.classList.remove('playing');
       }
+    }
+
+    // Check if audio needs lazy-loading (uploaded files with data)
+    if (audioElement.dataset.lazyLoad === 'true') {
+      const recordingKey = audioElement.dataset.recordingKey;
+
+      playIcon.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+      (async () => {
+        try {
+          console.log('Lazy-loading audio data for uploaded file...');
+          const recording = await window.StorageUtils.getRecording(recordingKey);
+
+          if (!recording || !recording.data || recording.data === 'data:audio/webm;base64,') {
+            throw new Error('No audio data available');
+          }
+
+          const blob = dataURLtoBlob(recording.data);
+          const blobUrl = URL.createObjectURL(blob);
+
+          audioElement.src = blobUrl;
+          audioElement.load();
+
+          await new Promise((resolve, reject) => {
+            audioElement.addEventListener('loadedmetadata', resolve, { once: true });
+            audioElement.addEventListener('error', reject, { once: true });
+            setTimeout(() => reject(new Error('Timeout loading audio')), 10000);
+          });
+
+          console.log('Audio loaded, duration:', audioElement.duration);
+          delete audioElement.dataset.lazyLoad;
+
+          audioElement.play();
+          playIcon.innerHTML = '<i class="fas fa-play"></i>';
+          playIcon.style.display = 'none';
+          pauseIcon.style.display = 'inline';
+          target.classList.add('playing');
+          currentlyPlayingAudio = audioElement;
+          currentlyPlayingButton = target;
+        } catch (err) {
+          console.error('Error loading audio:', err);
+          alert('Error loading audio for playback: ' + err.message);
+          playIcon.innerHTML = '<i class="fas fa-play"></i>';
+        }
+      })();
+
+      return;
     }
 
     // Check if audio needs WAV conversion (PCM recording for seekable playback)
@@ -1429,10 +1575,7 @@ historyList.addEventListener("click", async (e) => {
         try {
           console.log('Converting PCM to WAV for seekable playback...');
           const recording = await window.StorageUtils.getRecording(recordingKey);
-          const allRecordings = await window.StorageUtils.getAllRecordings();
-          const chunks = allRecordings.filter(r =>
-            r.source === 'recording-chunk' && r.parentRecordingId === recordingKey
-          ).sort((a, b) => a.chunkNumber - b.chunkNumber);
+          const chunks = await window.StorageUtils.getRecordingChunksWithData(recordingKey);
 
           if (chunks.length === 0) {
             throw new Error('No PCM chunks found');
@@ -1484,49 +1627,7 @@ historyList.addEventListener("click", async (e) => {
       return;
     }
 
-    // Check if audio needs chunk playback (chunked recording)
-    if (audioElement.dataset.needsMerge === 'true' && !chunkPlaybackState) {
-      // Start sequential chunk playback
-      const recordingKey = audioElement.dataset.recordingKey;
-
-      playIcon.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-
-      playChunksSequentially(recordingKey, audioElement, target).then(() => {
-        playIcon.innerHTML = '<i class="fas fa-play"></i>';
-        playIcon.style.display = 'none';
-        pauseIcon.style.display = 'inline';
-        target.classList.add('playing');
-        currentlyPlayingAudio = audioElement;
-        currentlyPlayingButton = target;
-      }).catch(err => {
-        console.error('Error starting chunk playback:', err);
-        alert('Error preparing audio for playback: ' + err.message);
-        playIcon.innerHTML = '<i class="fas fa-play"></i>';
-      });
-
-      return;
-    }
-
-    // Handle chunked playback resume/pause
-    if (chunkPlaybackState && chunkPlaybackState.audioElement === audioElement) {
-      if (audioElement.paused) {
-        // Resume chunked playback
-        resumeChunkPlaybackAudio();
-        playIcon.style.display = 'none';
-        pauseIcon.style.display = 'inline';
-        target.classList.add('playing');
-        currentlyPlayingAudio = audioElement;
-        currentlyPlayingButton = target;
-      } else {
-        // Pause chunked playback (preserve state for seeking)
-        pauseChunkPlayback();
-        playIcon.style.display = 'inline';
-        pauseIcon.style.display = 'none';
-        target.classList.remove('playing');
-      }
-      return;
-    }
-
+    // Normal playback for audio with source
     if (audioElement.paused) {
       audioElement.play();
       playIcon.style.display = 'none';
@@ -1720,12 +1821,9 @@ function dataURLtoBlob(dataURL) {
 async function recoverIncompleteRecordings() {
   try {
     console.log('Running recovery check for incomplete recordings...');
-    const allRecordings = await window.StorageUtils.getAllRecordings();
+    const { recordings, chunkMetadata: chunks } = await window.StorageUtils.getAllRecordingsMetadata();
 
-    // Find all chunks
-    const chunks = allRecordings.filter(r => r.source === 'recording-chunk');
-
-    console.log(`Found ${chunks.length} chunks in storage`);
+    console.log(`Found ${chunks.length} chunk metadata entries in storage`);
 
     if (chunks.length === 0) {
       console.log('No chunks to recover');
@@ -1733,11 +1831,7 @@ async function recoverIncompleteRecordings() {
     }
 
     // Find all parent recording IDs
-    const finalRecordingIds = new Set(
-      allRecordings
-        .filter(r => r.source === 'recording')
-        .map(r => r.key)
-    );
+    const finalRecordingIds = new Set(recordings.map(r => r.key));
 
     // Group chunks by parent recording ID
     const chunksByParent = {};
@@ -2906,4 +3000,26 @@ async function startAutoRefresh() {
     clearInterval(refreshInterval);
     refreshInterval = null;
   }
+}
+
+// List all recordings with their details (safe - doesn't delete anything)
+// Call from console: listAllRecordings()
+window.listAllRecordings = async function() {
+  const { recordings } = await window.StorageUtils.getAllRecordingsMetadata();
+
+  console.log('=== All Recordings ===');
+  for (const recording of recordings) {
+    const hasChunks = (recording.chunksCount > 0 || recording.chunkCount > 0);
+    console.log(`
+Key: ${recording.key}
+  isPcm: ${recording.isPcm}
+  source: ${recording.source}
+  hasChunks: ${hasChunks} (count: ${recording.chunksCount || recording.chunkCount || 0})
+  duration: ${recording.duration}s
+  timestamp: ${new Date(recording.timestamp).toLocaleString()}
+  _dataStripped: ${recording._dataStripped}
+    `);
+  }
+
+  return recordings;
 }

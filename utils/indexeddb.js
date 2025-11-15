@@ -127,16 +127,112 @@ class IndexedDBManager {
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor) {
-          recordings.push(cursor.value);
+          const recording = cursor.value;
+
+          // For chunk entries, strip the data to save memory
+          if (recording.source === 'recording-chunk' && recording.data) {
+            recordings.push({
+              ...recording,
+              data: null, // Strip chunk data for memory efficiency
+              _hasData: true // Flag that data exists but was stripped
+            });
+          } else {
+            recordings.push(recording);
+          }
+
           cursor.continue();
         } else {
-          console.log(`Retrieved ${recordings.length} recordings from IndexedDB`);
+          console.log(`Retrieved ${recordings.length} recordings from IndexedDB (chunks data stripped)`);
           resolve(recordings);
         }
       };
 
       request.onerror = () => {
         console.error('Error getting all recordings:', request.error);
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Get all recordings with metadata only (no chunk data) - ultra-fast for history display
+   * @returns {Promise<{recordings: Array, chunkMetadata: Array}>}
+   */
+  async getAllRecordingsMetadata() {
+    await this.init();
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([RECORDINGS_STORE], 'readonly');
+      const objectStore = transaction.objectStore(RECORDINGS_STORE);
+      const index = objectStore.index('timestamp');
+      const request = index.openCursor(null, 'prev');
+
+      const recordings = [];
+      const chunkMetadata = [];
+
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const recording = cursor.value;
+
+          if (recording.source === 'recording-chunk') {
+            // For chunks, only store metadata (no audio data)
+            chunkMetadata.push({
+              key: recording.key,
+              parentRecordingId: recording.parentRecordingId,
+              chunkNumber: recording.chunkNumber,
+              samplesCount: recording.samplesCount,
+              timestamp: recording.timestamp,
+              source: recording.source,
+              format: recording.format
+            });
+          } else {
+            // For main recordings, strip data field to save memory
+            const {data, ...metadata} = recording;
+            recordings.push({
+              ...metadata,
+              _dataStripped: !!data
+            });
+          }
+
+          cursor.continue();
+        } else {
+          console.log(`Retrieved ${recordings.length} recordings and ${chunkMetadata.length} chunk metadata entries`);
+          resolve({ recordings, chunkMetadata });
+        }
+      };
+
+      request.onerror = () => {
+        console.error('Error getting recordings metadata:', request.error);
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Get chunks with actual data for a specific recording
+   * @param {string} parentRecordingId - Parent recording ID
+   * @returns {Promise<Array>}
+   */
+  async getRecordingChunksWithData(parentRecordingId) {
+    await this.init();
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([RECORDINGS_STORE], 'readonly');
+      const objectStore = transaction.objectStore(RECORDINGS_STORE);
+      const request = objectStore.getAll();
+
+      request.onsuccess = () => {
+        const chunks = request.result
+          .filter(r => r.source === 'recording-chunk' && r.parentRecordingId === parentRecordingId)
+          .sort((a, b) => a.chunkNumber - b.chunkNumber);
+
+        console.log(`Retrieved ${chunks.length} chunks with data for ${parentRecordingId}`);
+        resolve(chunks);
+      };
+
+      request.onerror = () => {
+        console.error('Error getting chunks:', request.error);
         reject(request.error);
       };
     });

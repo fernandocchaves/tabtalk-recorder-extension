@@ -35,6 +35,14 @@ async function getAllRecordings() {
 }
 
 /**
+ * Get all recordings with metadata only (no audio data) - ultra-fast
+ * @returns {Promise<Array>} - Array of recording metadata objects
+ */
+async function getAllRecordingsMetadata() {
+  return await dbManager.getAllRecordingsMetadata();
+}
+
+/**
  * Get a specific recording by key
  * @param {string} key - Recording key
  * @returns {Promise<Object|null>} - Recording object or null
@@ -145,12 +153,23 @@ async function migrateFromChromeStorage() {
   return { migrated, failed, total: recordingKeys.length };
 }
 
+/**
+ * Get chunks with data for a specific recording
+ * @param {string} parentRecordingId - Parent recording ID
+ * @returns {Promise<Array>} - Array of chunks with data
+ */
+async function getRecordingChunksWithData(parentRecordingId) {
+  return await dbManager.getRecordingChunksWithData(parentRecordingId);
+}
+
 // Export for use in other scripts
 if (typeof window !== 'undefined') {
   window.StorageUtils = {
     saveRecording,
     getAllRecordings,
+    getAllRecordingsMetadata,
     getRecording,
+    getRecordingChunksWithData,
     deleteRecording,
     updateTranscription,
     updateProcessedTranscription,
