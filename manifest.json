@@ -1,7 +1,7 @@
 {
 	"name": "TabTalk Recorder - AI Audio Transcription",
-	"description": "Record tab audio and microphone with AI transcription. Custom prompts let you summarize, translate, or extract key points automatically.",
-	"version": "2.2.3",
+	"description": "Capture audio (tab/mic) with AI transcription. Custom prompts summarize, translate, or extract key points automatically.",
+	"version": "2.2.7",
 	"manifest_version": 3,
 	"minimum_chrome_version": "116",
 	"author": "SyBlock",
