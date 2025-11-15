@@ -1,38 +1,38 @@
 {
-  "name": "TabTalk Recorder",
-  "description": "Record tab audio and microphone with AI transcription. Noise suppression, echo cancellation, powered by Google Gemini.",
-  "version": "2.2.2",
-  "manifest_version": 3,
-  "minimum_chrome_version": "116",
-  "author": "TabTalk Recorder Team",
-  "homepage_url": "https://github.com/syblock/tabtalk-recorder-extension",
-  "action": {
-    "default_icon": {
-      "16": "icons/not-recording-16.png",
-      "32": "icons/not-recording-32.png",
-      "48": "icons/not-recording-48.png",
-      "128": "icons/not-recording-128.png"
-    },
-    "default_popup": "popup.html"
-  },
-  "options_page": "settings.html",
-  "background": {
-    "service_worker": "service-worker.js"
-  },
-  "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com;"
-  },
-  "icons": {
-    "16": "icons/icon-16.png",
-    "32": "icons/icon-32.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["libs/*"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+	"name": "TabTalk Recorder - AI Audio Transcription",
+	"description": "Record tab audio and microphone with AI transcription. Custom prompts let you summarize, translate, or extract key points automatically.",
+	"version": "2.2.3",
+	"manifest_version": 3,
+	"minimum_chrome_version": "116",
+	"author": "SyBlock",
+	"homepage_url": "https://github.com/syblock/tabtalk-recorder-extension",
+	"action": {
+		"default_icon": {
+			"16": "icons/not-recording-16.png",
+			"32": "icons/not-recording-32.png",
+			"48": "icons/not-recording-48.png",
+			"128": "icons/not-recording-128.png"
+		},
+		"default_popup": "popup.html"
+	},
+	"options_page": "settings.html",
+	"background": {
+		"service_worker": "service-worker.js"
+	},
+	"permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
+	"content_security_policy": {
+		"extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com;"
+	},
+	"icons": {
+		"16": "icons/icon-16.png",
+		"32": "icons/icon-32.png",
+		"48": "icons/icon-48.png",
+		"128": "icons/icon-128.png"
+	},
+	"web_accessible_resources": [
+		{
+			"resources": ["libs/*"],
+			"matches": ["<all_urls>"]
+		}
+	]
 }
