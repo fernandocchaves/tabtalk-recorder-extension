@@ -198,6 +198,13 @@ startButton.addEventListener("click", async () => {
       targetTabId: tab.id,
     });
 
+    // Notify service worker of the recording tab ID
+    chrome.runtime.sendMessage({
+      type: "recording-started",
+      target: "service-worker",
+      data: { tabId: tab.id }
+    });
+
     chrome.runtime.sendMessage({
       type: "start-recording",
       target: "offscreen",

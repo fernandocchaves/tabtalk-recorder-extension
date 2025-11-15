@@ -27,6 +27,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "stop-recording":
         stopRecording();
         break;
+      case "finalize-incomplete":
+        // Handle incomplete recording finalization
+        (async () => {
+          try {
+            console.log('Finalizing incomplete recording:', message.data);
+            currentRecordingId = message.data.recordingId;
+            recordingStartTime = message.data.recordingStartTime;
+
+            // Set sample rate and channels (use defaults if not provided)
+            sampleRate = message.data.sampleRate || 48000;
+            numberOfChannels = message.data.numberOfChannels || 1;
+
+            // Finalize the recording (this will save final entry with all chunks)
+            await finalizeRecording();
+            cleanup();
+
+            console.log('Incomplete recording finalized successfully');
+            sendResponse({ success: true });
+          } catch (error) {
+            console.error('Error finalizing incomplete recording:', error);
+            sendResponse({ success: false, error: error.message });
+          }
+        })();
+        return true; // Keep channel open for async response
       default:
         throw new Error("Unrecognized message:", message.type);
     }
@@ -287,6 +311,11 @@ async function stopAllStreams() {
 
 // Save PCM chunk for crash recovery (incremental, concatenatable)
 async function savePcmChunk() {
+  // Skip if pcmChunks is not initialized (recovery scenario)
+  if (!pcmChunks || pcmChunks.length === 0) {
+    return;
+  }
+
   const newChunksCount = pcmChunks.length - lastSavedPcmIndex;
 
   if (newChunksCount <= 0) {
@@ -305,8 +334,17 @@ async function savePcmChunk() {
       offset += chunk.length;
     }
 
+    // Convert Float32 to Int16 for storage (half the size)
+    const int16Array = new Int16Array(totalLength);
+    for (let i = 0; i < totalLength; i++) {
+      const sample = concatenated[i];
+      // Clamp to [-1, 1] and convert to Int16 range
+      const clamped = Math.max(-1, Math.min(1, sample));
+      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+    }
+
     // Convert to base64 for storage (process in chunks to avoid stack overflow)
-    const uint8Array = new Uint8Array(concatenated.buffer);
+    const uint8Array = new Uint8Array(int16Array.buffer);
     let binary = '';
     const chunkSize = 8192; // Process 8KB at a time
     for (let i = 0; i < uint8Array.length; i += chunkSize) {
@@ -319,7 +357,7 @@ async function savePcmChunk() {
     const chunkNumber = await getNextChunkNumber();
     const chunkTimestamp = Date.now();
 
-    console.log(`Saving PCM chunk ${chunkNumber} (${(totalLength * 4 / 1024).toFixed(2)} KB, ${newChunksCount} buffers)`);
+    console.log(`Saving PCM chunk ${chunkNumber} (${(totalLength * 2 / 1024).toFixed(2)} KB, ${newChunksCount} buffers)`);
 
     let attempts = 0;
     while (!window.StorageUtils && attempts < 100) {
@@ -337,12 +375,12 @@ async function savePcmChunk() {
       source: 'recording-chunk',
       parentRecordingId: currentRecordingId,
       chunkNumber: chunkNumber,
-      chunkSize: totalLength * 4, // Float32 = 4 bytes per sample
+      chunkSize: totalLength * 2, // Int16 = 2 bytes per sample
       chunkTimestamp: chunkTimestamp,
       sampleRate: sampleRate,
       numberOfChannels: numberOfChannels,
       samplesCount: totalLength,
-      format: 'pcm-float32'
+      format: 'pcm-int16'
     });
 
     console.log(`PCM chunk ${chunkNumber} saved successfully`);
@@ -405,37 +443,21 @@ async function finalizeRecording() {
 
     // Calculate total size and duration
     const totalSamples = chunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
-    const totalSize = totalSamples * 4; // Float32 = 4 bytes
+    const totalSize = totalSamples * 2; // Int16 = 2 bytes per sample
     const estimatedDuration = Math.floor(totalSamples / sampleRate);
 
-    // Also save the WebM data for quick playback preview
-    let webmDataUrl = 'data:audio/webm;base64,';
-    console.log(`WebM data chunks collected: ${data.length} blobs`);
-    if (data.length > 0) {
-      const webmBlob = new Blob(data, { type: 'audio/webm' });
-      console.log(`WebM blob size: ${(webmBlob.size / 1024).toFixed(2)} KB`);
-      const reader = new FileReader();
-      webmDataUrl = await new Promise((resolve) => {
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(webmBlob);
-      });
-      console.log(`WebM data URL length: ${webmDataUrl.length} chars (${(webmDataUrl.length / 1024).toFixed(2)} KB)`);
-    } else {
-      console.warn('No WebM data collected - recording may not have playback preview');
-    }
+    console.log(`PCM recording: ${chunks.length} chunks, ${totalSamples} samples, ${estimatedDuration}s`);
 
-    // Save the final recording metadata
+    // Save the final recording metadata (no WebM data needed, PCM chunks are used for playback)
     const dbModule = await import('./utils/indexeddb.js').then(m => m.default);
     await dbModule.init();
 
     await dbModule.saveRecording(currentRecordingId, {
       key: currentRecordingId,
-      data: webmDataUrl, // WebM for quick playback
       source: 'recording',
       timestamp: recordingStartTime,
       duration: estimatedDuration,
       fileSize: totalSize,
-      mimeType: 'audio/webm',
       chunksCount: chunks.length,
       isChunked: true,
       isPcm: true, // Flag to indicate PCM chunks

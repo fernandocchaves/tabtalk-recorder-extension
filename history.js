@@ -330,8 +330,8 @@ async function downloadRecording(recordingKey, recordingId) {
 
     console.log(`Found ${chunks.length} chunks for conversion...`);
 
-    // PCM format - convert to WAV
-    const isPcmFormat = chunks[0].format === 'pcm-float32';
+    // PCM format - convert to WAV (supports both Int16 and Float32)
+    const isPcmFormat = chunks[0].format === 'pcm-float32' || chunks[0].format === 'pcm-int16';
 
     if (isPcmFormat) {
       // Convert PCM chunks to WAV using user's quality setting
@@ -368,10 +368,12 @@ async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targe
   const ratio = sampleRate / finalSampleRate;
   const finalSampleCount = Math.floor(totalSamples / ratio);
 
-  console.log(`Converting ${chunks.length} PCM chunks (${totalSamples} samples @ ${sampleRate}Hz -> ${finalSampleCount} samples @ ${finalSampleRate}Hz) to WAV...`);
+  // Detect format from first chunk (support both old Float32 and new Int16)
+  const isInt16Format = chunks[0]?.format === 'pcm-int16';
+  console.log(`Converting ${chunks.length} ${isInt16Format ? 'Int16' : 'Float32'} PCM chunks (${totalSamples} samples @ ${sampleRate}Hz -> ${finalSampleCount} samples @ ${finalSampleRate}Hz) to WAV...`);
 
   // Prepare WAV header
-  const bytesPerSample = 2; // 16-bit
+  const bytesPerSample = 2; // 16-bit output
   const blockAlign = numberOfChannels * bytesPerSample;
   const byteRate = finalSampleRate * blockAlign;
   const dataSize = finalSampleCount * bytesPerSample;
@@ -401,9 +403,7 @@ async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targe
   let totalProcessedSamples = 0;
 
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
-    console.log(`Processing PCM chunk ${chunkIdx + 1}/${chunks.length}...`);
-
-    // Decode base64 data to Float32Array
+    // Decode base64 data
     const base64Data = chunks[chunkIdx].data.split(',')[1];
     const binaryString = atob(base64Data);
     const bytes = new Uint8Array(binaryString.length);
@@ -411,13 +411,26 @@ async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targe
       bytes[j] = binaryString.charCodeAt(j);
     }
 
-    const pcmData = new Float32Array(bytes.buffer);
+    // Parse based on format
+    let pcmSamples;
+    if (isInt16Format || chunks[chunkIdx].format === 'pcm-int16') {
+      // Int16 format - already in the right format for WAV
+      pcmSamples = new Int16Array(bytes.buffer);
+    } else {
+      // Float32 format (legacy) - convert to Int16
+      const float32Data = new Float32Array(bytes.buffer);
+      pcmSamples = new Int16Array(float32Data.length);
+      for (let i = 0; i < float32Data.length; i++) {
+        const sample = Math.max(-1, Math.min(1, float32Data[i]));
+        pcmSamples[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      }
+    }
 
     // Write samples to WAV with optional downsampling
     if (targetSampleRate && targetSampleRate !== sampleRate) {
       // Downsample: for each chunk, determine which output samples to write
       const chunkStartSample = totalProcessedSamples;
-      const chunkEndSample = totalProcessedSamples + pcmData.length;
+      const chunkEndSample = totalProcessedSamples + pcmSamples.length;
 
       const outputStartIndex = Math.floor(chunkStartSample / ratio);
       const outputEndIndex = Math.floor(chunkEndSample / ratio);
@@ -426,30 +439,26 @@ async function convertPcmChunksToWav(chunks, sampleRate, numberOfChannels, targe
         // Calculate source position in the original sample rate
         const sourcePosition = outputIdx * ratio - chunkStartSample;
 
-        if (sourcePosition >= 0 && sourcePosition < pcmData.length - 1) {
-          // Linear interpolation
+        if (sourcePosition >= 0 && sourcePosition < pcmSamples.length - 1) {
+          // Linear interpolation for Int16
           const index0 = Math.floor(sourcePosition);
-          const index1 = Math.min(index0 + 1, pcmData.length - 1);
+          const index1 = Math.min(index0 + 1, pcmSamples.length - 1);
           const fraction = sourcePosition - index0;
-          const sample = pcmData[index0] * (1 - fraction) + pcmData[index1] * fraction;
+          const sample = pcmSamples[index0] * (1 - fraction) + pcmSamples[index1] * fraction;
 
-          const clamped = Math.max(-1, Math.min(1, sample));
-          const int16 = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
-          view.setInt16(writeOffset, int16, true);
+          view.setInt16(writeOffset, Math.round(sample), true);
           writeOffset += 2;
         }
       }
 
-      totalProcessedSamples += pcmData.length;
+      totalProcessedSamples += pcmSamples.length;
     } else {
       // Direct write without downsampling
-      for (let i = 0; i < pcmData.length; i++) {
-        const sample = Math.max(-1, Math.min(1, pcmData[i]));
-        const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-        view.setInt16(writeOffset, int16, true);
+      for (let i = 0; i < pcmSamples.length; i++) {
+        view.setInt16(writeOffset, pcmSamples[i], true);
         writeOffset += 2;
       }
-      totalProcessedSamples += pcmData.length;
+      totalProcessedSamples += pcmSamples.length;
     }
 
     // Allow garbage collection between chunks
@@ -687,25 +696,18 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function loadHistory() {
+async function loadHistory(skipRecovery = false) {
   // Use metadata-only query for fast loading (doesn't load audio data)
-  const { recordings: finalRecordings, chunkMetadata: chunks } = await window.StorageUtils.getAllRecordingsMetadata();
+  let { recordings: finalRecordings, chunkMetadata: chunks } = await window.StorageUtils.getAllRecordingsMetadata();
 
-  console.log('Total recordings (metadata only):', finalRecordings.length);
-  console.log('Total chunk metadata:', chunks.length);
+  console.log(`Loaded ${finalRecordings.length} recordings, ${chunks.length} chunks`);
 
   // Check for active recording from chrome.storage
   const storageData = await chrome.storage.local.get(['activeRecordingId', 'recordingStartTime']);
   let activeRecordingId = storageData.activeRecordingId;
   const activeRecordingStartTime = storageData.recordingStartTime;
 
-  console.log('Storage data:', storageData);
-  console.log('Active recording from storage:', activeRecordingId);
-  console.log('Recording start time from storage:', activeRecordingStartTime);
-
   // Verify if offscreen document actually exists and is recording
-  // NOTE: We DON'T clear the activeRecordingId here yet - let recovery run first
-  // Recovery will finalize incomplete chunks, then we can clear stale state
   let isActuallyRecording = false;
   if (activeRecordingId) {
     try {
@@ -714,14 +716,9 @@ async function loadHistory() {
         (c) => c.contextType === "OFFSCREEN_DOCUMENT"
       );
 
-      console.log('Offscreen document:', offscreenDocument);
-      console.log('Document URL:', offscreenDocument?.documentUrl);
-
       if (offscreenDocument && offscreenDocument.documentUrl.endsWith("#recording")) {
         isActuallyRecording = true;
-        console.log('Recording is ACTIVE - keeping activeRecordingId');
       } else {
-        console.log('Active recording ID exists but no active offscreen recording - setting to null');
         // Don't show as actively recording, but don't clear yet - let recovery handle it
         activeRecordingId = null;
       }
@@ -730,11 +727,18 @@ async function loadHistory() {
     }
   }
 
-  console.log('Final recordings:', finalRecordings.length);
-  console.log('Final recording keys:', finalRecordings.map(r => r.key));
-  if (chunks.length > 0) {
-    console.log('First chunk metadata:', chunks[0]);
-    console.log('Chunk count by parent:', chunks.reduce((acc, c) => { acc[c.parentRecordingId] = (acc[c.parentRecordingId] || 0) + 1; return acc; }, {}));
+  // Run recovery check if not actively recording and not skipping
+  if (!skipRecovery && !isActuallyRecording) {
+    const recoveredAny = await recoverIncompleteRecordings(finalRecordings, chunks);
+    if (recoveredAny) {
+      // Reload data after recovery (only once)
+      console.log('Recovery performed, reloading data...');
+      const freshData = await window.StorageUtils.getAllRecordingsMetadata();
+      finalRecordings = freshData.recordings;
+      chunks = freshData.chunkMetadata;
+      // Clear stale active recording state after recovery
+      chrome.storage.local.remove(['activeRecordingId', 'recordingStartTime']);
+    }
   }
 
   // Group chunks by parent recording ID
@@ -746,21 +750,15 @@ async function loadHistory() {
     chunksByParent[chunk.parentRecordingId].push(chunk);
   }
 
-  console.log('Chunks by parent:', Object.keys(chunksByParent));
-
   // Find incomplete recordings (have chunks but no final recording)
   const incompleteRecordings = [];
   const finalRecordingIds = new Set(finalRecordings.map(r => r.key));
 
-  console.log('Final recording IDs:', Array.from(finalRecordingIds));
-
   // Check if there's an active recording that doesn't have chunks yet
   if (activeRecordingId && !finalRecordingIds.has(activeRecordingId)) {
     const hasChunks = chunksByParent[activeRecordingId];
-    console.log('Active recording check:', activeRecordingId, 'Has chunks?', !!hasChunks, 'Chunk count:', hasChunks?.length || 0);
     if (!hasChunks) {
       // Active recording with no chunks yet - show it anyway
-      console.log('Adding active recording without chunks:', activeRecordingId);
       const timestamp = activeRecordingStartTime || parseInt(activeRecordingId.replace('recording-', ''));
       incompleteRecordings.push({
         key: activeRecordingId,
@@ -770,13 +768,10 @@ async function loadHistory() {
         isIncomplete: true,
         chunkCount: 0
       });
-    } else {
-      console.log('Active recording has chunks, will be added in loop below');
     }
   }
 
   for (const [parentId, parentChunks] of Object.entries(chunksByParent)) {
-    console.log('Checking parent ID:', parentId, 'Has final?', finalRecordingIds.has(parentId));
     if (!finalRecordingIds.has(parentId)) {
       // This is an active/incomplete recording with chunks
       parentChunks.sort((a, b) => a.chunkNumber - b.chunkNumber);
@@ -789,11 +784,8 @@ async function loadHistory() {
         isIncomplete: true,
         chunkCount: parentChunks.length
       });
-      console.log('Added incomplete recording:', parentId, 'with', parentChunks.length, 'chunks');
     }
   }
-
-  console.log('Total incomplete recordings:', incompleteRecordings.length);
 
   // Attach chunks to final recordings as well (for transcription)
   const finalRecordingsWithChunks = finalRecordings.map(recording => {
@@ -813,11 +805,7 @@ async function loadHistory() {
   const allDisplayRecordings = [...finalRecordingsWithChunks, ...incompleteRecordings]
     .sort((a, b) => b.timestamp - a.timestamp);
 
-  console.log('Final recordings to display:', finalRecordings.length);
-  console.log('Final recordings with chunks:', finalRecordingsWithChunks.filter(r => r.chunkCount).map(r => ({ key: r.key, chunkCount: r.chunkCount })));
-  console.log('Incomplete recordings to display:', incompleteRecordings.length);
-  console.log('Incomplete recordings detail:', incompleteRecordings.map(r => ({ key: r.key, chunkCount: r.chunkCount, isIncomplete: r.isIncomplete })));
-  console.log('Total recordings to display:', allDisplayRecordings.length);
+  console.log(`Displaying ${allDisplayRecordings.length} recordings (${incompleteRecordings.length} incomplete)`);
 
   historyList.innerHTML = "";
 
@@ -845,7 +833,6 @@ async function loadHistory() {
     const isUploaded = recording.source === 'upload';
     const isIncomplete = recording.isIncomplete || false;
 
-    console.log(`Displaying recording ${key}: isIncomplete=${isIncomplete}, chunkCount=${recording.chunkCount || 0}, hasChunks=${!!recording.chunks}, duration=${recording.duration}, dataStripped=${recording._dataStripped}, isPcm=${recording.isPcm}, chunksCount=${recording.chunksCount}, source=${recording.source}`);
     const displayName = isUploaded && recording.filename ? recording.filename : fileName;
     const iconClass = isUploaded ? 'fa-file-audio' : 'fa-microphone';
 
@@ -861,17 +848,13 @@ async function loadHistory() {
 
     if (isPcmWithChunks) {
       // PCM recording with chunks - will convert to WAV on play
-      console.log(`  → PCM with chunks detected, will use WAV conversion`);
       audioSrc = null; // No preview, will convert on play
       needsWavConversion = true;
       estimatedDuration = recording.duration;
     } else if (recording._dataStripped || (recording.data && recording.data !== 'data:audio/webm;base64,')) {
       // Uploaded file or old recording with data - lazy-load on play
-      console.log(`  → Lazy-load path (dataStripped=${recording._dataStripped}, hasData=${!!recording.data})`);
       audioSrc = 'pending-load';
       estimatedDuration = recording.duration;
-    } else {
-      console.log(`  → No audio source determined`);
     }
 
     const hasAudio = isPcmWithChunks || recording._dataStripped || isUploaded;
@@ -891,12 +874,12 @@ async function loadHistory() {
                 <span class="duration-text">Loading...</span>
               </span>
               ${isUploaded ? '<span class="upload-badge"><i class="fas fa-upload"></i> Uploaded</span>' : ''}
-              ${isIncomplete ? `<span class="recording-badge"><i class="fas fa-circle"></i> ${recording.chunkCount} chunks</span>` : ''}
+              ${isIncomplete ? `<span class="recording-badge"><i class="fas fa-circle"></i> Recording...</span>` : ''}
               ${recording.transcription ? '<span class="transcription-badge"><i class="fas fa-check-circle"></i> Transcribed</span>' : ''}
             </div>
           </div>
         </div>
-        ${hasAudio ? `
+        ${hasAudio && !isIncomplete ? `
         <div class="audio-player">
           <audio id="audio-${recordingId}" preload="metadata"
                  data-lazy-load="${audioSrc === 'pending-load' ? 'true' : 'false'}"
@@ -914,7 +897,7 @@ async function loadHistory() {
               </span>
             </button>
             <div class="progress-container">
-              <div class="progress-bar seekable" data-audio-id="audio-${recordingId}" data-recording-key="${key}">
+              <div class="progress-bar seekable" data-audio-id="audio-${recordingId}" data-recording-key="${key}" style="cursor: pointer;">
                 <div class="progress-fill" id="progress-${recordingId}"></div>
               </div>
               <div class="time-display">
@@ -931,10 +914,10 @@ async function loadHistory() {
         </div>
         `}
         <div class="actions">
-          <button class="action-btn transcribe-btn ${hasTranscription}" data-key="${key}" data-recording-id="${recordingId}" title="${transcribeTitle}">
+          <button class="action-btn transcribe-btn ${hasTranscription}" data-key="${key}" data-recording-id="${recordingId}" title="${transcribeTitle}" ${isIncomplete ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
             <i class="fas fa-file-alt"></i>
           </button>
-          <button class="action-btn download-btn" data-key="${key}" data-recording-id="${recordingId}" title="Download">
+          <button class="action-btn download-btn" data-key="${key}" data-recording-id="${recordingId}" title="Download" ${isIncomplete ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
             <i class="fas fa-download"></i>
           </button>
           <button class="action-btn delete-btn" data-key="${key}" title="Delete">
@@ -1127,6 +1110,7 @@ async function transcribeAudio(recordingId) {
       // Use chunked transcription for recordings with chunks
       const updateStatus = (message, chunkIndex, totalChunks) => {
         const progress = totalChunks > 0 ? Math.round(((chunkIndex + 1) / totalChunks) * 100) : 0;
+        const showSegmentInfo = chunkIndex >= 0 && totalChunks > 0 && !isNaN(chunkIndex) && !isNaN(totalChunks);
 
         // Update status badge and progress bar
         transcriptionStatus.innerHTML = `
@@ -1136,7 +1120,7 @@ async function transcribeAudio(recordingId) {
             <div class="transcription-progress-bar" style="margin-top: 8px;">
               <div class="transcription-progress-fill" style="width: ${progress}%"></div>
             </div>
-            <span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks})</span>
+            ${showSegmentInfo ? `<span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks})</span>` : ''}
           </span>
         `;
       };
@@ -1287,6 +1271,7 @@ async function resumeChunkedTranscription(recordingId) {
 
     const updateStatus = (message, chunkIndex, totalChunks) => {
       const progress = totalChunks > 0 ? Math.round(((chunkIndex + 1) / totalChunks) * 100) : 0;
+      const showSegmentInfo = chunkIndex >= 0 && totalChunks > 0 && !isNaN(chunkIndex) && !isNaN(totalChunks);
       transcriptionStatus.innerHTML = `
         <span class="status-badge status-transcribing">
           <i class="fas fa-spinner fa-spin"></i>
@@ -1294,7 +1279,7 @@ async function resumeChunkedTranscription(recordingId) {
           <div class="transcription-progress-bar" style="margin-top: 8px;">
             <div class="transcription-progress-fill" style="width: ${progress}%"></div>
           </div>
-          <span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks} segments)</span>
+          ${showSegmentInfo ? `<span class="progress-indicator">${progress}% (${chunkIndex + 1}/${totalChunks} segments)</span>` : ''}
         </span>
       `;
     };
@@ -1714,7 +1699,7 @@ historyList.addEventListener("click", async (e) => {
     // Check if audio needs WAV conversion first (PCM recording)
     const srcIsValid = audioElement.src && (audioElement.src.startsWith('blob:') || audioElement.src.startsWith('data:'));
     if (audioElement.dataset.needsWavConversion === 'true' && !srcIsValid) {
-      console.warn('Audio needs WAV conversion before seeking. Play it first to enable seeking.');
+      // Audio not ready for seeking yet - silently ignore click
       return;
     }
 
@@ -1818,16 +1803,11 @@ function dataURLtoBlob(dataURL) {
 }
 
 // Recover incomplete recordings from orphaned chunks
-async function recoverIncompleteRecordings() {
+// Returns true if any recovery was performed (requires data reload)
+async function recoverIncompleteRecordings(recordings, chunks) {
   try {
-    console.log('Running recovery check for incomplete recordings...');
-    const { recordings, chunkMetadata: chunks } = await window.StorageUtils.getAllRecordingsMetadata();
-
-    console.log(`Found ${chunks.length} chunk metadata entries in storage`);
-
     if (chunks.length === 0) {
-      console.log('No chunks to recover');
-      return;
+      return false;
     }
 
     // Find all parent recording IDs
@@ -1842,13 +1822,12 @@ async function recoverIncompleteRecordings() {
       chunksByParent[chunk.parentRecordingId].push(chunk);
     }
 
-    console.log('Chunk groups by parent:', Object.keys(chunksByParent));
-    console.log('Final recording IDs:', Array.from(finalRecordingIds));
+    let recoveredAny = false;
 
     // Find incomplete recordings (have chunks but no final recording)
     for (const [parentId, parentChunks] of Object.entries(chunksByParent)) {
       if (!finalRecordingIds.has(parentId)) {
-        console.log(`Found incomplete recording ${parentId} with ${parentChunks.length} chunks, attempting recovery...`);
+        console.log(`Recovering incomplete recording ${parentId} (${parentChunks.length} chunks)...`);
 
         try {
           // Sort chunks by chunk number
@@ -1857,41 +1836,42 @@ async function recoverIncompleteRecordings() {
           // Get the original timestamp from the parent ID
           const timestamp = parseInt(parentId.replace('recording-', ''));
 
-          // Calculate duration and total size from chunks
-          const lastChunk = parentChunks[parentChunks.length - 1];
-          const estimatedDuration = lastChunk.chunkTimestamp
-            ? Math.floor((lastChunk.chunkTimestamp - timestamp) / 1000)
-            : parentChunks.length * 60; // Fallback: estimate 60 seconds per chunk
+          // Calculate total samples and duration from actual audio data
+          const totalSamples = parentChunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
+          const sampleRate = parentChunks[0]?.sampleRate || 48000;
+          const numberOfChannels = parentChunks[0]?.numberOfChannels || 1;
+
+          // Duration from actual samples (most accurate)
+          const estimatedDuration = Math.floor(totalSamples / sampleRate);
 
           const totalSize = parentChunks.reduce((sum, chunk) => {
-            // Calculate size from data URL if chunkSize not available
-            const size = chunk.chunkSize || (chunk.data.length * 0.75); // Approximate base64 size
+            // Use chunkSize from metadata, fallback to samplesCount * bytes per sample
+            const bytesPerSample = chunk.format === 'pcm-int16' ? 2 : 4;
+            const size = chunk.chunkSize || (chunk.samplesCount ? chunk.samplesCount * bytesPerSample : 0);
             return sum + size;
           }, 0);
 
-          console.log(`Recovering ${parentChunks.length} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB total)`);
-
-          // Create a metadata record (no need to merge chunks - history.js handles playback)
-          const placeholderData = 'data:audio/webm;base64,';
-
-          // Save the recovered recording metadata
+          // Save the recovered recording metadata (PCM format, no WebM data needed)
           const dbModule = await import('./utils/indexeddb.js').then(m => m.default);
           await dbModule.init();
 
           await dbModule.saveRecording(parentId, {
             key: parentId, // Use same key as parent ID so chunks can be found
-            data: placeholderData, // Placeholder, actual audio is in chunks
             source: 'recording',
             timestamp: timestamp,
             duration: estimatedDuration,
             fileSize: totalSize,
-            mimeType: 'audio/webm',
             chunksCount: parentChunks.length,
-            isChunked: true, // Flag to indicate this uses chunks for playback
+            isChunked: true,
+            isPcm: true, // PCM recording
+            sampleRate: sampleRate,
+            numberOfChannels: numberOfChannels,
+            totalSamples: totalSamples,
             recovered: true
           });
 
-          console.log(`Recovered recording metadata saved with ${parentChunks.length} chunks`);
+          console.log(`✓ Recovered ${parentId} (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
+          recoveredAny = true;
 
         } catch (error) {
           console.error(`Failed to recover recording ${parentId}:`, error);
@@ -1899,23 +1879,10 @@ async function recoverIncompleteRecordings() {
       }
     }
 
-    // Clean up any truly orphaned chunks (old chunks with no parent and no siblings)
-    const orphanedChunks = chunks.filter(chunk => {
-      const siblings = chunksByParent[chunk.parentRecordingId] || [];
-      return siblings.length === 0 || !finalRecordingIds.has(chunk.parentRecordingId);
-    });
-
-    if (orphanedChunks.length > 0 && Object.keys(chunksByParent).length === 0) {
-      console.log(`Found ${orphanedChunks.length} truly orphaned chunks, cleaning up...`);
-
-      for (const chunk of orphanedChunks) {
-        await window.StorageUtils.deleteRecording(chunk.key);
-      }
-
-      console.log('Orphaned chunks cleaned up successfully');
-    }
+    return recoveredAny;
   } catch (error) {
     console.error('Error recovering incomplete recordings:', error);
+    return false;
   }
 }
 
@@ -1935,37 +1902,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // Check if there's an active recording before running recovery
-  // Don't recover chunks that are still being recorded!
-  const storageCheck = await chrome.storage.local.get(['activeRecordingId']);
-  let hasActiveRecording = false;
-
-  if (storageCheck.activeRecordingId) {
-    // Check if offscreen document actually exists and is recording
-    try {
-      const contexts = await chrome.runtime.getContexts({});
-      const offscreenDocument = contexts.find(
-        (c) => c.contextType === "OFFSCREEN_DOCUMENT"
-      );
-
-      if (offscreenDocument && offscreenDocument.documentUrl.endsWith("#recording")) {
-        hasActiveRecording = true;
-        console.log('Skipping recovery - recording is ACTUALLY active:', storageCheck.activeRecordingId);
-      } else {
-        console.log('activeRecordingId exists but no offscreen recording - will run recovery');
-        // Clear stale state
-        chrome.storage.local.remove(['activeRecordingId', 'recordingStartTime']);
-      }
-    } catch (error) {
-      console.error('Error checking offscreen document:', error);
-    }
-  }
-
-  if (!hasActiveRecording) {
-    // Recover incomplete recordings on load if NO active recording
-    await recoverIncompleteRecordings();
-  }
-
+  // Load history - recovery check is now integrated to avoid double DB queries
   await loadHistory();
 
   // Auto-refresh removed - it causes page flickering

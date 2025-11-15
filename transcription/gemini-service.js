@@ -306,7 +306,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       // Check if chunks are PCM format (new continuous recording system)
       let recordingChunks;
-      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || metadata?.isPcm;
+      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || rawChunks[0]?.format === 'pcm-int16' || metadata?.isPcm;
 
       console.log(`[CHUNKED TRANSCRIPTION] Format detection: rawChunks[0].format="${rawChunks[0]?.format}", metadata.isPcm=${metadata?.isPcm}, isPcmFormat=${isPcmFormat}`);
 
@@ -418,14 +418,8 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         console.log(`[PCM STREAMING] Loading storage chunk ${storageChunkIdx + 1}/${pcmChunks.length}`);
         const chunk = pcmChunks[storageChunkIdx];
 
-        // Decode base64 to Float32Array
-        const base64Data = chunk.data.split(',')[1];
-        const binaryString = atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        pcmData = new Float32Array(bytes.buffer);
+        // Decode PCM data (supports both Int16 and Float32 formats)
+        pcmData = this._decodePcmChunk(chunk);
         sampleOffset = 0;
         storageChunkIdx++;
 
@@ -534,7 +528,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       // Check if chunks are PCM format (new continuous recording system)
       let recordingChunks;
-      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || metadata?.isPcm;
+      const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || rawChunks[0]?.format === 'pcm-int16' || metadata?.isPcm;
 
       if (isPcmFormat) {
         console.log(`[RESUME TRANSCRIPTION] Detected PCM format, converting to WAV segments`);
@@ -687,14 +681,8 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     for (let chunkIdx = 0; chunkIdx < pcmChunks.length; chunkIdx++) {
       const chunk = pcmChunks[chunkIdx];
 
-      // Decode base64 to Float32Array (one chunk at a time to manage memory)
-      const base64Data = chunk.data.split(',')[1];
-      const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      const pcmData = new Float32Array(bytes.buffer);
+      // Decode PCM data (supports both Int16 and Float32 formats)
+      const pcmData = this._decodePcmChunk(chunk);
 
       console.log(`[PCM TRANSCRIPTION] Loaded storage chunk ${chunkIdx + 1}/${pcmChunks.length}: ${pcmData.length} samples`);
 
@@ -832,6 +820,34 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     const base64 = btoa(binary);
 
     return `data:audio/wav;base64,${base64}`;
+  }
+
+  /**
+   * Decode PCM chunk data to Float32Array (supports both Int16 and Float32 formats)
+   * @private
+   */
+  _decodePcmChunk(chunk) {
+    const base64Data = chunk.data.split(',')[1];
+    const binaryString = atob(base64Data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Check format and convert to Float32Array
+    if (chunk.format === 'pcm-int16') {
+      // Int16 format - convert to Float32 for processing
+      const int16Data = new Int16Array(bytes.buffer);
+      const float32Data = new Float32Array(int16Data.length);
+      for (let i = 0; i < int16Data.length; i++) {
+        // Convert Int16 [-32768, 32767] to Float32 [-1, 1]
+        float32Data[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF);
+      }
+      return float32Data;
+    } else {
+      // Float32 format (legacy)
+      return new Float32Array(bytes.buffer);
+    }
   }
 
   /**

@@ -38,8 +38,8 @@ class ConfigManager {
   async load() {
     try {
       // Check if chrome API is available
-      if (typeof chrome === 'undefined' || !chrome.storage) {
-        console.warn('Chrome storage API not available, using defaults');
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+        // Silently use defaults - this is expected in some contexts
         this.loaded = true;
         return this.config;
       }

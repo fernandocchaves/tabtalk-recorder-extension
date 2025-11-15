@@ -164,17 +164,17 @@ class IndexedDBManager {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([RECORDINGS_STORE], 'readonly');
       const objectStore = transaction.objectStore(RECORDINGS_STORE);
-      const index = objectStore.index('timestamp');
-      const request = index.openCursor(null, 'prev');
 
-      const recordings = [];
-      const chunkMetadata = [];
+      // Use getAll() for faster bulk retrieval instead of cursor iteration
+      const request = objectStore.getAll();
 
       request.onsuccess = (event) => {
-        const cursor = event.target.result;
-        if (cursor) {
-          const recording = cursor.value;
+        const allRecords = event.target.result;
+        const recordings = [];
+        const chunkMetadata = [];
 
+        // Process all records in memory (much faster than cursor)
+        for (const recording of allRecords) {
           if (recording.source === 'recording-chunk') {
             // For chunks, only store metadata (no audio data)
             chunkMetadata.push({
@@ -184,7 +184,11 @@ class IndexedDBManager {
               samplesCount: recording.samplesCount,
               timestamp: recording.timestamp,
               source: recording.source,
-              format: recording.format
+              format: recording.format,
+              chunkSize: recording.chunkSize,
+              sampleRate: recording.sampleRate,
+              numberOfChannels: recording.numberOfChannels,
+              chunkTimestamp: recording.chunkTimestamp
             });
           } else {
             // For main recordings, strip data field to save memory
@@ -194,12 +198,12 @@ class IndexedDBManager {
               _dataStripped: !!data
             });
           }
-
-          cursor.continue();
-        } else {
-          console.log(`Retrieved ${recordings.length} recordings and ${chunkMetadata.length} chunk metadata entries`);
-          resolve({ recordings, chunkMetadata });
         }
+
+        // Sort recordings by timestamp (newest first)
+        recordings.sort((a, b) => b.timestamp - a.timestamp);
+
+        resolve({ recordings, chunkMetadata });
       };
 
       request.onerror = () => {
