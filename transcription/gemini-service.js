@@ -169,7 +169,47 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       .replace(/\n```$/, '')
       .trim();
 
+    // Check if output is just timestamps (common error when no speech detected)
+    // Pattern: lines that are only timestamps like "00:00", "00:01", etc.
+    const lines = cleaned.split('\n').map(l => l.trim()).filter(l => l);
+    const timestampPattern = /^\d{2}:\d{2}(:\d{2})?$/;
+    const allTimestamps = lines.length > 0 && lines.every(line => timestampPattern.test(line));
+
+    if (allTimestamps) {
+      // Model output only timestamps, likely no speech detected
+      return '';
+    }
+
+    // Fix hallucination loops - detect and remove excessive repetitions
+    // This handles cases where the model gets stuck repeating the same phrase
+    cleaned = this._removeExcessiveRepetitions(cleaned);
+
     return cleaned;
+  }
+
+  /**
+   * Remove excessive repetitions caused by model hallucination
+   * Detects when a word or phrase is repeated more than 10 times consecutively
+   * @private
+   */
+  _removeExcessiveRepetitions(text) {
+    // Pattern to match any word/phrase repeated more than 10 times consecutively
+    // This regex finds sequences where the same token appears 10+ times in a row
+    let result = text;
+
+    // Handle word-level repetitions (e.g., "ماشین رو ماشین رو ماشین رو...")
+    // Match any sequence of characters followed by space, repeated 10+ times
+    const wordRepeatPattern = /(\S+(?:\s+\S+){0,3})\s+(?:\1\s+){9,}/g;
+    result = result.replace(wordRepeatPattern, '$1 ');
+
+    // Handle single word repetitions without spaces (e.g., "نه نه نه نه...")
+    const singleWordPattern = /(\S+)\s+(?:\1\s+){9,}/g;
+    result = result.replace(singleWordPattern, '$1 ');
+
+    // Clean up multiple spaces
+    result = result.replace(/\s+/g, ' ').trim();
+
+    return result;
   }
 
   _isAuthError(error) {

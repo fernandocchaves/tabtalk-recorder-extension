@@ -1084,8 +1084,16 @@ async function transcribeAudio(recordingId) {
     const key = `recording-${recordingId}`;
     const recording = await window.StorageUtils.getRecording(key);
 
-    if (!recording || !recording.data) {
+    if (!recording) {
       throw new Error('Recording not found');
+    }
+
+    // Check if this recording has chunks (PCM recordings don't have data field, only chunks)
+    const hasChunks = await recordingHasChunks(key);
+
+    // For non-chunked recordings, we need the data field
+    if (!recording.data && !hasChunks) {
+      throw new Error('Recording data not found');
     }
 
     // Wait for transcription service to be available
@@ -1099,8 +1107,6 @@ async function transcribeAudio(recordingId) {
       throw new Error('Transcription service not available');
     }
 
-    // Check if this recording has chunks (indicating it needs chunked transcription)
-    const hasChunks = await recordingHasChunks(key);
     console.log(`Recording ${key} has chunks:`, hasChunks);
     let transcriptionText;
 
