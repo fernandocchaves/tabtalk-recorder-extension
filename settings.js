@@ -54,6 +54,7 @@ const elements = {
   tabGainValue: document.getElementById('tabGainValue'),
   micGain: document.getElementById('micGain'),
   micGainValue: document.getElementById('micGainValue'),
+  enableMicrophoneCapture: document.getElementById('enableMicrophoneCapture'),
   audioQuality: document.getElementById('audioQuality'),
   qualityDescription: document.getElementById('qualityDescription'),
 
@@ -104,6 +105,7 @@ async function loadSettings() {
     elements.tabGainValue.textContent = `${currentConfig.tabGain || 1.0}x`;
     elements.micGain.value = currentConfig.micGain || 1.5;
     elements.micGainValue.textContent = `${currentConfig.micGain || 1.5}x`;
+    elements.enableMicrophoneCapture.checked = currentConfig.enableMicrophoneCapture !== false;
     elements.audioQuality.value = currentConfig.audioQuality || 48000;
     updateQualityDescription();
     elements.maxRecordings.value = currentConfig.maxRecordings || 50;
@@ -152,6 +154,7 @@ function setupEventListeners() {
 
   // Other inputs
   elements.autoTranscribe.addEventListener('change', () => unsavedChanges = true);
+  elements.enableMicrophoneCapture.addEventListener('change', () => unsavedChanges = true);
   elements.maxRecordings.addEventListener('change', () => unsavedChanges = true);
   elements.showNotifications.addEventListener('change', () => unsavedChanges = true);
 
@@ -307,6 +310,7 @@ async function saveAllSettings() {
       autoTranscribe: elements.autoTranscribe.checked,
       tabGain: parseFloat(elements.tabGain.value),
       micGain: parseFloat(elements.micGain.value),
+      enableMicrophoneCapture: elements.enableMicrophoneCapture.checked,
       audioQuality: parseInt(elements.audioQuality.value),
       maxRecordings: parseInt(elements.maxRecordings.value),
       showNotifications: elements.showNotifications.checked

@@ -119,21 +119,49 @@ async function startRecording(streamId) {
       video: false,
     });
 
-    // Get microphone stream with noise cancellation
-    const micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
+    // Get microphone stream (if enabled in settings)
+    let micStream = null;
+    let enableMicrophoneCapture = false; // default - tab audio only
 
-    activeStreams.push(tabStream, micStream);
+    // Load microphone capture setting from storage
+    try {
+      if (typeof StorageKeys !== 'undefined' && StorageKeys.USER_SETTINGS) {
+        const result = await chrome.storage.local.get(StorageKeys.USER_SETTINGS);
+        if (result[StorageKeys.USER_SETTINGS]) {
+          enableMicrophoneCapture = result[StorageKeys.USER_SETTINGS].enableMicrophoneCapture !== false;
+        }
+      }
+    } catch (error) {
+      console.error('Error loading microphone setting:', error);
+    }
 
-    // Load user settings for audio quality and gain
+    // Load full config for other settings (audio quality, gains, etc)
     const configManager = new ConfigManager();
     const userConfig = await configManager.load();
+
+    if (enableMicrophoneCapture) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+        activeStreams.push(micStream);
+        console.log('Microphone enabled');
+      } catch (error) {
+        console.warn('Failed to get microphone stream:', error.message);
+        micStream = null;
+      }
+    } else {
+      console.log('Recording tab audio only (microphone disabled)');
+    }
+
+    activeStreams.push(tabStream);
+
+    // Get desired sample rate from already loaded config
     const desiredSampleRate = userConfig.audioQuality || 48000;
 
     // Create audio context with user-selected sample rate
@@ -145,7 +173,7 @@ async function startRecording(streamId) {
 
     // Create sources
     const tabSource = audioContext.createMediaStreamSource(tabStream);
-    const micSource = audioContext.createMediaStreamSource(micStream);
+    const micSource = micStream ? audioContext.createMediaStreamSource(micStream) : null;
     destination = audioContext.createMediaStreamDestination();
 
     // Create gain nodes with user settings
@@ -160,9 +188,11 @@ async function startRecording(streamId) {
     tabGain.connect(audioContext.destination);
     tabGain.connect(destination);
 
-    // Connect mic to destination only
-    micSource.connect(micGain);
-    micGain.connect(destination);
+    // Connect mic to destination only (if mic stream exists)
+    if (micSource) {
+      micSource.connect(micGain);
+      micGain.connect(destination);
+    }
 
     // Set up PCM capture using ScriptProcessorNode
     // This captures raw audio data continuously without any encoding gaps
@@ -172,7 +202,9 @@ async function startRecording(streamId) {
     // Mix tab and mic into single channel for PCM capture
     const merger = audioContext.createChannelMerger(2);
     tabGain.connect(merger, 0, 0);
-    micGain.connect(merger, 0, 0);
+    if (micSource) {
+      micGain.connect(merger, 0, 0);
+    }
 
     // Capture PCM data
     scriptProcessor.onaudioprocess = (event) => {
