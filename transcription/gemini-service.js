@@ -448,37 +448,46 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     let sampleOffset = 0;
 
     // Process storage chunks and create/transcribe segments on-the-fly
-    while (storageChunkIdx < pcmChunks.length || currentSegmentSamples > 0) {
+    while (storageChunkIdx < pcmChunks.length || currentSegmentSamples > 0 || (pcmData && sampleOffset < pcmData.length)) {
       // Load next storage chunk if needed
       if (!pcmData || sampleOffset >= pcmData.length) {
         if (storageChunkIdx >= pcmChunks.length) {
-          break; // No more chunks to load
+          // No more chunks to load - check if we have remaining data to process
+          if (currentSegmentSamples > 0) {
+            console.log(`[PCM STREAMING] Processing final segment with ${currentSegmentSamples} samples`);
+            pcmData = null;
+          } else {
+            break; // Nothing left to process
+          }
+        } else {
+          console.log(`[PCM STREAMING] Loading storage chunk ${storageChunkIdx + 1}/${pcmChunks.length}`);
+          const chunk = pcmChunks[storageChunkIdx];
+
+          // Decode PCM data (supports both Int16 and Float32 formats)
+          pcmData = this._decodePcmChunk(chunk);
+          sampleOffset = 0;
+          storageChunkIdx++;
+
+          // Allow garbage collection
+          await this._sleep(10);
         }
-
-        console.log(`[PCM STREAMING] Loading storage chunk ${storageChunkIdx + 1}/${pcmChunks.length}`);
-        const chunk = pcmChunks[storageChunkIdx];
-
-        // Decode PCM data (supports both Int16 and Float32 formats)
-        pcmData = this._decodePcmChunk(chunk);
-        sampleOffset = 0;
-        storageChunkIdx++;
-
-        // Allow garbage collection
-        await this._sleep(10);
       }
 
-      // Fill current segment from loaded PCM data
-      const samplesToTake = Math.min(
-        pcmData.length - sampleOffset,
-        originalSamplesPerSegment - currentSegmentSamples
-      );
+      // Fill current segment from loaded PCM data (skip if no more data to load)
+      if (pcmData) {
+        const samplesToTake = Math.min(
+          pcmData.length - sampleOffset,
+          originalSamplesPerSegment - currentSegmentSamples
+        );
 
-      currentSegmentData.push(pcmData.slice(sampleOffset, sampleOffset + samplesToTake));
-      currentSegmentSamples += samplesToTake;
-      sampleOffset += samplesToTake;
+        currentSegmentData.push(pcmData.slice(sampleOffset, sampleOffset + samplesToTake));
+        currentSegmentSamples += samplesToTake;
+        sampleOffset += samplesToTake;
+      }
 
       // If segment is complete, transcribe it immediately
-      if (currentSegmentSamples >= originalSamplesPerSegment || (storageChunkIdx >= pcmChunks.length && sampleOffset >= pcmData.length && currentSegmentSamples > 0)) {
+      if (currentSegmentSamples >= originalSamplesPerSegment ||
+          (storageChunkIdx >= pcmChunks.length && (!pcmData || sampleOffset >= pcmData.length) && currentSegmentSamples > 0)) {
         const requestStartTime = Date.now();
 
         // Concatenate segment parts
@@ -503,6 +512,11 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         try {
           const transcription = await this._transcribeSingleChunk(wavDataUrl, segmentNumber + 1, 'audio/wav');
           console.log(`[PCM STREAMING] Segment ${segmentNumber + 1} transcription: ${transcription.length} chars`);
+          if (transcription.length === 0) {
+            console.warn(`[PCM STREAMING] WARNING: Segment ${segmentNumber + 1} returned empty transcription!`);
+          } else {
+            console.log(`[PCM STREAMING] Segment ${segmentNumber + 1} preview: "${transcription.substring(0, 100)}..."`);
+          }
           transcriptions.push(transcription);
 
           // Save progress
@@ -1015,7 +1029,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
             temperature: 0.1,
             topK: 1,
             topP: 0.95,
-            maxOutputTokens: 8192,
+            maxOutputTokens: 16384, // Increased for longer Portuguese transcriptions
           }
         })
       }
@@ -1027,9 +1041,18 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     }
 
     const data = await response.json();
+
+    // Check if response was truncated due to token limit
+    const finishReason = data.candidates?.[0]?.finishReason;
+    if (finishReason === 'MAX_TOKENS') {
+      console.error(`[TRANSCRIPTION] Segment ${segmentNumber} hit MAX_TOKENS limit! Response was truncated.`);
+      console.error(`[TRANSCRIPTION] Consider reducing TRANSCRIPTION_CHUNK_INTERVAL_MS further.`);
+    }
+
     const transcription = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!transcription || transcription.trim() === '') {
+      console.warn(`[TRANSCRIPTION] Segment ${segmentNumber} returned empty transcription. FinishReason: ${finishReason}`);
       return ''; // Empty segment is okay
     }
 
