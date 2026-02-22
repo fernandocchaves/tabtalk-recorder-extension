@@ -9,6 +9,7 @@ const DEFAULT_CONFIG = {
   micGain: 1.5,
   audioQuality: 48000, // Sample rate in Hz (16000, 22050, 32000, 44100, 48000)
   enableMicrophoneCapture: false, // Enable/disable microphone capture (default: false - tab audio only)
+  enableTabVideoCapture: false, // Enable/disable tab video capture (records video/webm alongside PCM audio chunks)
 
   // Transcription settings
   transcriptionService: 'gemini',

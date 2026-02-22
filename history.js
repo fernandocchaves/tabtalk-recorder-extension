@@ -379,6 +379,21 @@ async function downloadRecording(recordingKey, recordingId) {
   const date = new Date(recording.timestamp);
   const dateStr = date.toISOString().slice(0, 19).replace(/[T:]/g, "-");
 
+  // Prefer original captured tab video when available
+  if (
+    recording.hasVideo &&
+    recording.data &&
+    recording.data !== "data:audio/webm;base64,"
+  ) {
+    const blob = dataURLtoBlob(recording.data);
+    const filename = `tabtalk-${dateStr}.webm`;
+    downloadBlob(blob, filename);
+    console.log(
+      `Downloaded video: ${filename} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`,
+    );
+    return;
+  }
+
   // For PCM recordings, always convert to WAV (has proper duration)
   // For non-PCM recordings with WebM data, download WebM directly
   if (
@@ -960,7 +975,11 @@ async function loadHistory(skipRecovery = false) {
 
     const displayName =
       isUploaded && recording.filename ? recording.filename : fileName;
-    const iconClass = isUploaded ? "fa-file-audio" : "fa-microphone";
+    const iconClass = recording.hasVideo
+      ? "fa-video"
+      : isUploaded
+        ? "fa-file-audio"
+        : "fa-microphone";
 
     // Modern PCM recordings with chunks - convert to WAV on-demand
     // Note: Some old recordings may not have isPcm flag set, so we also check if it has chunks but no data
@@ -968,13 +987,23 @@ async function loadHistory(skipRecovery = false) {
     const hasNoData =
       !recording.data || recording.data === "data:audio/webm;base64,";
     const isPcmWithChunks =
-      (recording.isPcm && hasChunks) || (hasChunks && hasNoData && !isUploaded);
+      ((recording.isPcm && hasChunks) || (hasChunks && hasNoData && !isUploaded)) &&
+      !recording.hasVideo;
+
+    const hasSavedVideoMedia =
+      recording.hasVideo &&
+      (recording._dataStripped ||
+        (recording.data && recording.data !== "data:audio/webm;base64,"));
 
     let audioSrc = null;
     let estimatedDuration = recording.duration || null;
     let needsWavConversion = false;
 
-    if (isPcmWithChunks) {
+    if (hasSavedVideoMedia) {
+      // Video recording saved with WebM preview/download payload - lazy load on play
+      audioSrc = "pending-load";
+      estimatedDuration = recording.duration;
+    } else if (isPcmWithChunks) {
       // PCM recording with chunks - will convert to WAV on play
       audioSrc = null; // No preview, will convert on play
       needsWavConversion = true;
@@ -988,7 +1017,15 @@ async function loadHistory(skipRecovery = false) {
       estimatedDuration = recording.duration;
     }
 
-    const hasAudio = isPcmWithChunks || recording._dataStripped || isUploaded;
+    const hasAudio =
+      hasSavedVideoMedia || isPcmWithChunks || recording._dataStripped || isUploaded;
+    const mediaTag = hasSavedVideoMedia ? "video" : "audio";
+    const mediaType = hasSavedVideoMedia
+      ? recording.mimeType || "video/webm"
+      : "audio/webm";
+    const mediaClass = hasSavedVideoMedia ? ' class="recording-video-preview"' : "";
+    const mediaExtraAttrs = hasSavedVideoMedia ? " playsinline" : "";
+    const playerClass = hasSavedVideoMedia ? "audio-player has-video" : "audio-player";
 
     recordingCard.innerHTML = `
       <div class="recording-card-main">
@@ -1013,13 +1050,13 @@ async function loadHistory(skipRecovery = false) {
         ${
           hasAudio && !isIncomplete
             ? `
-        <div class="audio-player">
-          <audio id="audio-${recordingId}" preload="metadata"
+        <div class="${playerClass}">
+          <${mediaTag} id="audio-${recordingId}" preload="metadata"${mediaClass}${mediaExtraAttrs}
                  data-lazy-load="${audioSrc === "pending-load" ? "true" : "false"}"
                  data-recording-key="${key}"
                  ${needsWavConversion ? 'data-needs-wav-conversion="true"' : ""}>
-            ${audioSrc && audioSrc !== "pending-load" ? `<source src="${audioSrc}" type="audio/webm">` : ""}
-          </audio>
+            ${audioSrc && audioSrc !== "pending-load" ? `<source src="${audioSrc}" type="${mediaType}">` : ""}
+          </${mediaTag}>
           <div class="player-controls">
             <button class="play-btn" data-key="${key}" data-audio-id="audio-${recordingId}">
               <span class="play-icon">
@@ -1924,6 +1961,38 @@ historyList.addEventListener("click", async (e) => {
   }
 });
 
+// Click on video preview area to toggle fullscreen (excluding controls)
+historyList.addEventListener("click", async (e) => {
+  const playerContainer = e.target.closest(".audio-player.has-video");
+  if (!playerContainer) return;
+  if (e.target.closest(".player-controls")) return;
+
+  const videoElement = playerContainer.querySelector(".recording-video-preview");
+  if (!videoElement) return;
+
+  try {
+    if (document.fullscreenElement) {
+      if (document.fullscreenElement === videoElement) {
+        await document.exitFullscreen?.();
+      }
+      return;
+    }
+
+    if (videoElement.requestFullscreen) {
+      await videoElement.requestFullscreen();
+    } else if (videoElement.webkitRequestFullscreen) {
+      videoElement.webkitRequestFullscreen();
+    } else if (videoElement.webkitEnterFullscreen) {
+      videoElement.webkitEnterFullscreen();
+    } else {
+      throw new Error("Fullscreen API not supported");
+    }
+  } catch (error) {
+    console.error("Fullscreen failed:", error);
+    alert("Fullscreen failed: " + error.message);
+  }
+});
+
 // Click handler for progress bar seeking
 historyList.addEventListener("click", async (e) => {
   const progressBar = e.target.closest(".progress-bar.seekable");
@@ -2075,9 +2144,27 @@ historyList.addEventListener("click", async (e) => {
 
 // Helper function to convert data URL to Blob without fetch (avoids CSP issues)
 function dataURLtoBlob(dataURL) {
-  const arr = dataURL.split(",");
-  const mime = arr[0].match(/:(.*?);/)[1];
-  const bstr = atob(arr[1]);
+  const base64Marker = ";base64,";
+  const markerIndex = dataURL.indexOf(base64Marker);
+  if (markerIndex === -1) {
+    throw new Error("Invalid data URL format");
+  }
+  const header = dataURL.slice(0, markerIndex + ";base64".length);
+  let base64Data = dataURL
+    .slice(markerIndex + base64Marker.length)
+    .replace(/\s/g, "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  const mime = header.match(/:(.*?);base64/)?.[1] || header.match(/:(.*?);/)?.[1];
+  if (!mime) {
+    throw new Error("Invalid data URL MIME type");
+  }
+  // Normalize missing padding for some persisted data URLs
+  const padding = base64Data.length % 4;
+  if (padding) {
+    base64Data += "=".repeat(4 - padding);
+  }
+  const bstr = atob(base64Data);
   let n = bstr.length;
   const u8arr = new Uint8Array(n);
   while (n--) {

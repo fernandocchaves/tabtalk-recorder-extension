@@ -14,7 +14,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
   _debugLog(...args) {
     if (this._isDebugLoggingEnabled()) {
-      this._debugLog(...args);
+      console.log(...args);
     }
   }
 
@@ -1325,9 +1325,27 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    * @private
    */
   _dataURLtoBlob(dataURL) {
-    const arr = dataURL.split(",");
-    const mime = arr[0].match(/:(.*?);/)[1];
-    const bstr = atob(arr[1]);
+    const base64Marker = ";base64,";
+    const markerIndex = dataURL.indexOf(base64Marker);
+    if (markerIndex === -1) {
+      throw new Error("Invalid data URL format");
+    }
+    const header = dataURL.slice(0, markerIndex + ";base64".length);
+    let base64Data = dataURL
+      .slice(markerIndex + base64Marker.length)
+      .replace(/\s/g, "")
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const mime =
+      header.match(/:(.*?);base64/)?.[1] || header.match(/:(.*?);/)?.[1];
+    if (!mime) {
+      throw new Error("Invalid data URL MIME type");
+    }
+    const padding = base64Data.length % 4;
+    if (padding) {
+      base64Data += "=".repeat(4 - padding);
+    }
+    const bstr = atob(base64Data);
     let n = bstr.length;
     const u8arr = new Uint8Array(n);
     while (n--) {

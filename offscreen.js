@@ -12,6 +12,8 @@ let lastSavedPcmIndex = 0; // Track which PCM chunks we've saved
 let sampleRate = 48000;
 let numberOfChannels = 1;
 let autoTranscriptionTasks = new Map();
+let isRecordingVideo = false;
+let recordingMimeType = "audio/webm";
 
 // Get constants from centralized config (loaded via constants.js)
 const getChunkIntervalMs = () =>
@@ -61,6 +63,15 @@ async function storageBridgeGet(keys) {
   return response.data || {};
 }
 
+async function blobToDataUrl(blob) {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("Failed to read blob"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function loadOffscreenUserConfig() {
   const defaults =
     typeof window !== "undefined" && window.DEFAULT_CONFIG
@@ -70,6 +81,7 @@ async function loadOffscreenUserConfig() {
           micGain: 1.5,
           audioQuality: 48000,
           enableMicrophoneCapture: false,
+          enableTabVideoCapture: false,
           autoTranscribe: false,
           transcriptionChunkIntervalMs: 60000,
           geminiTranscriptionMaxOutputTokens: 16384,
@@ -278,7 +290,14 @@ async function startRecording(streamId) {
   await stopAllStreams();
 
   try {
-    // Get tab audio stream
+    // Load full config for recording/transcription settings
+    const userConfig = await loadOffscreenUserConfig();
+    const enableTabVideoCapture = toBooleanSetting(
+      userConfig.enableTabVideoCapture,
+      false,
+    );
+
+    // Capture tab once (audio + optional video)
     const tabStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
@@ -286,14 +305,20 @@ async function startRecording(streamId) {
           chromeMediaSourceId: streamId,
         },
       },
-      video: false,
+      video: enableTabVideoCapture
+        ? {
+            mandatory: {
+              chromeMediaSource: "tab",
+              chromeMediaSourceId: streamId,
+            },
+          }
+        : false,
     });
 
     // Get microphone stream (if enabled in settings)
     let micStream = null;
 
-    // Load full config for other settings (audio quality, gains, mic capture, etc)
-    const userConfig = await loadOffscreenUserConfig();
+    // Read per-recording toggles/settings
     const enableMicrophoneCapture = toBooleanSetting(
       userConfig.enableMicrophoneCapture,
       false,
@@ -333,8 +358,11 @@ async function startRecording(streamId) {
       `Audio context created with sample rate: ${sampleRate} Hz (requested: ${desiredSampleRate} Hz)`,
     );
 
+    // Create audio-only view of the tab stream for the Web Audio graph
+    const tabAudioStream = new MediaStream(tabStream.getAudioTracks());
+
     // Create sources
-    const tabSource = audioContext.createMediaStreamSource(tabStream);
+    const tabSource = audioContext.createMediaStreamSource(tabAudioStream);
     const micSource = micStream
       ? audioContext.createMediaStreamSource(micStream)
       : null;
@@ -381,9 +409,34 @@ async function startRecording(streamId) {
     pcmMixNode.connect(scriptProcessor);
     scriptProcessor.connect(audioContext.destination);
 
-    // Also set up MediaRecorder for WebM output (for playback preview)
-    recorder = new MediaRecorder(destination.stream, {
-      mimeType: "audio/webm",
+    // Build recording stream: mixed audio + optional tab video
+    const finalRecordingTracks = [...destination.stream.getAudioTracks()];
+    const tabVideoTrack = tabStream.getVideoTracks()[0] || null;
+    if (enableTabVideoCapture && tabVideoTrack) {
+      finalRecordingTracks.push(tabVideoTrack);
+      isRecordingVideo = true;
+      recordingMimeType =
+        (typeof MediaRecorder !== "undefined" &&
+          MediaRecorder.isTypeSupported?.("video/webm;codecs=vp9,opus") &&
+          "video/webm;codecs=vp9,opus") ||
+        (typeof MediaRecorder !== "undefined" &&
+          MediaRecorder.isTypeSupported?.("video/webm;codecs=vp8,opus") &&
+          "video/webm;codecs=vp8,opus") ||
+        "video/webm";
+      console.log("Tab video capture enabled");
+    } else {
+      isRecordingVideo = false;
+      recordingMimeType = "audio/webm";
+      if (enableTabVideoCapture) {
+        console.warn("Tab video capture requested but no tab video track was available");
+      }
+    }
+
+    const mediaRecorderStream = new MediaStream(finalRecordingTracks);
+
+    // Also set up MediaRecorder for preview/download output
+    recorder = new MediaRecorder(mediaRecorderStream, {
+      mimeType: recordingMimeType,
     });
 
     recorder.ondataavailable = (event) => {
@@ -481,6 +534,8 @@ function cleanup() {
   currentRecordingId = null;
   audioContext = null;
   destination = null;
+  isRecordingVideo = false;
+  recordingMimeType = "audio/webm";
 
   chrome.runtime.sendMessage({
     type: "clear-recording-state",
@@ -656,7 +711,20 @@ async function finalizeRecording() {
       `PCM recording: ${chunks.length} chunks, ${totalSamples} samples, ${estimatedDuration}s`,
     );
 
-    // Save the final recording metadata (no WebM data needed, PCM chunks are used for playback)
+    // Build optional preview/download media payload (audio-only or tab video WebM)
+    let mediaDataUrl = null;
+    let mediaBlobSize = 0;
+    if (isRecordingVideo && data.length > 0) {
+      try {
+        const mediaBlob = new Blob(data, { type: recordingMimeType || "audio/webm" });
+        mediaBlobSize = mediaBlob.size;
+        mediaDataUrl = await blobToDataUrl(mediaBlob);
+      } catch (error) {
+        console.warn("Failed to build preview/download media blob:", error);
+      }
+    }
+
+    // Save the final recording metadata; keep PCM chunks for transcription/download conversion
     const dbModule = await import("./utils/indexeddb.js").then(
       (m) => m.default,
     );
@@ -664,13 +732,16 @@ async function finalizeRecording() {
 
     await dbModule.saveRecording(currentRecordingId, {
       key: currentRecordingId,
+      data: mediaDataUrl,
       source: "recording",
       timestamp: recordingStartTime,
       duration: estimatedDuration,
-      fileSize: totalSize,
+      fileSize: mediaBlobSize || totalSize,
       chunksCount: chunks.length,
       isChunked: true,
       isPcm: true, // Flag to indicate PCM chunks
+      hasVideo: isRecordingVideo,
+      mimeType: recordingMimeType,
       sampleRate: sampleRate,
       numberOfChannels: numberOfChannels,
       totalSamples: totalSamples,
