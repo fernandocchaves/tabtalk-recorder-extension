@@ -219,7 +219,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
               type: 'indexeddb-save',
               target: 'storage-handler',
               data: {
-                audioDataUrl: message.data,
+                mediaPayload: message.data,
                 metadata: {
                   source: 'recording'
                 }

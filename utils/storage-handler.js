@@ -12,7 +12,7 @@ const isServiceWorker = typeof importScripts === 'function';
  * In service worker: sends message to offscreen document
  * In other contexts: uses IndexedDB directly
  */
-async function saveRecording(audioDataUrl, metadata = {}) {
+async function saveRecording(mediaPayload, metadata = {}) {
   if (isServiceWorker) {
     // Service worker: delegate to offscreen document or create storage context
     return new Promise((resolve, reject) => {
@@ -20,7 +20,7 @@ async function saveRecording(audioDataUrl, metadata = {}) {
         type: 'indexeddb-save',
         target: 'storage-handler',
         data: {
-          audioDataUrl,
+          mediaPayload,
           metadata
         }
       }, (response) => {
@@ -36,7 +36,7 @@ async function saveRecording(audioDataUrl, metadata = {}) {
   } else {
     // Browser context: use IndexedDB directly
     if (window.StorageUtils) {
-      return window.StorageUtils.saveRecording(audioDataUrl, metadata);
+      return window.StorageUtils.saveRecording(mediaPayload, metadata);
     } else {
       throw new Error('StorageUtils not available');
     }

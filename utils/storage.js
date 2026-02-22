@@ -3,16 +3,16 @@ import dbManager from './indexeddb.js';
 
 /**
  * Save a recording to IndexedDB
- * @param {string} audioDataUrl - Audio data in data URL format
+ * @param {string|Blob|ArrayBuffer} mediaPayload - Recording media payload
  * @param {Object} metadata - Optional metadata (source, filename, fileSize, mimeType, duration, key)
  * @returns {Promise<string>} - Key of the saved recording
  */
-async function saveRecording(audioDataUrl, metadata = {}) {
+async function saveRecording(mediaPayload, metadata = {}) {
   const timestamp = metadata.timestamp || Date.now();
   const key = metadata.key || `recording-${timestamp}`;
 
   const recordingData = {
-    data: audioDataUrl,
+    data: mediaPayload,
     timestamp: timestamp,
     transcription: null,
     ...metadata

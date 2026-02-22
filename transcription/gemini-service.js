@@ -1219,17 +1219,35 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    * @private
    */
   _decodePcmChunk(chunk) {
-    const base64Data = chunk.data.split(",")[1];
-    const binaryString = atob(base64Data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+    let bytes;
+    if (chunk.data instanceof ArrayBuffer) {
+      bytes = new Uint8Array(chunk.data);
+    } else if (ArrayBuffer.isView(chunk.data)) {
+      bytes = new Uint8Array(
+        chunk.data.buffer,
+        chunk.data.byteOffset,
+        chunk.data.byteLength,
+      );
+    } else if (typeof chunk.data === "string") {
+      const base64Data = chunk.data.split(",")[1];
+      const binaryString = atob(base64Data);
+      bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+    } else {
+      throw new Error("Unsupported PCM chunk payload type");
     }
+
+    const bytesBuffer =
+      bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+        ? bytes.buffer
+        : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
     // Check format and convert to Float32Array
     if (chunk.format === "pcm-int16") {
       // Int16 format - convert to Float32 for processing
-      const int16Data = new Int16Array(bytes.buffer);
+      const int16Data = new Int16Array(bytesBuffer);
       const float32Data = new Float32Array(int16Data.length);
       for (let i = 0; i < int16Data.length; i++) {
         // Convert Int16 [-32768, 32767] to Float32 [-1, 1]
@@ -1238,7 +1256,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       return float32Data;
     } else {
       // Float32 format (legacy)
-      return new Float32Array(bytes.buffer);
+      return new Float32Array(bytesBuffer);
     }
   }
 
@@ -1325,6 +1343,26 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    * @private
    */
   _dataURLtoBlob(dataURL) {
+    if (dataURL instanceof Blob) {
+      return dataURL;
+    }
+    if (dataURL instanceof ArrayBuffer) {
+      return new Blob([dataURL], { type: "application/octet-stream" });
+    }
+    if (ArrayBuffer.isView(dataURL)) {
+      return new Blob(
+        [
+          dataURL.buffer.slice(
+            dataURL.byteOffset,
+            dataURL.byteOffset + dataURL.byteLength,
+          ),
+        ],
+        { type: "application/octet-stream" },
+      );
+    }
+    if (typeof dataURL !== "string") {
+      throw new Error("Unsupported payload type");
+    }
     const base64Marker = ";base64,";
     const markerIndex = dataURL.indexOf(base64Marker);
     if (markerIndex === -1) {

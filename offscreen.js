@@ -7,7 +7,7 @@ let currentRecordingId = null;
 let audioContext = null;
 let destination = null;
 let pcmChunks = []; // Store PCM Float32Array chunks
-let scriptProcessor = null;
+let pcmCaptureNode = null;
 let lastSavedPcmIndex = 0; // Track which PCM chunks we've saved
 let sampleRate = 48000;
 let numberOfChannels = 1;
@@ -20,6 +20,46 @@ const getChunkIntervalMs = () =>
   window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 300000;
 const getCrashRecoveryIntervalMs = () =>
   window.RECORDING_CONSTANTS?.CRASH_RECOVERY_INTERVAL_MS || 10000;
+
+async function createPcmCaptureNode(audioContext) {
+  if (
+    typeof AudioWorkletNode === "undefined" ||
+    !audioContext?.audioWorklet?.addModule
+  ) {
+    throw new Error("AudioWorklet not supported in this context");
+  }
+
+  await audioContext.audioWorklet.addModule(
+    chrome.runtime.getURL("pcm-capture-worklet.js"),
+  );
+
+  const node = new AudioWorkletNode(audioContext, "pcm-capture-processor", {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    channelCount: 1,
+    channelCountMode: "explicit",
+  });
+
+  node.port.onmessage = (event) => {
+    if (event.data?.type !== "pcm" || !event.data.samples) return;
+
+    const { samples } = event.data;
+    if (samples instanceof Float32Array) {
+      pcmChunks.push(samples);
+      return;
+    }
+    if (samples instanceof ArrayBuffer) {
+      pcmChunks.push(new Float32Array(samples));
+      return;
+    }
+    if (ArrayBuffer.isView(samples)) {
+      pcmChunks.push(new Float32Array(samples.buffer.slice(0)));
+    }
+  };
+
+  return node;
+}
 
 function toBooleanSetting(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -61,15 +101,6 @@ async function storageBridgeGet(keys) {
   }
 
   return response.data || {};
-}
-
-async function blobToDataUrl(blob) {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error || new Error("Failed to read blob"));
-    reader.readAsDataURL(blob);
-  });
 }
 
 async function loadOffscreenUserConfig() {
@@ -257,7 +288,7 @@ async function handleStorageOperation(message, sendResponse) {
     switch (message.type) {
       case "indexeddb-save":
         const key = await window.StorageUtils.saveRecording(
-          message.data.audioDataUrl,
+          message.data.mediaPayload ?? message.data.audioDataUrl,
           message.data.metadata,
         );
         sendResponse({ success: true, key });
@@ -386,11 +417,6 @@ async function startRecording(streamId) {
       micGain.connect(destination);
     }
 
-    // Set up PCM capture using ScriptProcessorNode
-    // This captures raw audio data continuously without any encoding gaps
-    const bufferSize = 4096;
-    scriptProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-
     // Sum tab + mic into one path for PCM capture (channel merger is not for mixing)
     const pcmMixNode = audioContext.createGain();
     tabGain.connect(pcmMixNode);
@@ -398,16 +424,26 @@ async function startRecording(streamId) {
       micGain.connect(pcmMixNode);
     }
 
-    // Capture PCM data
-    scriptProcessor.onaudioprocess = (event) => {
-      const inputData = event.inputBuffer.getChannelData(0);
-      // Clone the data since the buffer is reused
-      const pcmData = new Float32Array(inputData);
-      pcmChunks.push(pcmData);
-    };
+    try {
+      pcmCaptureNode = await createPcmCaptureNode(audioContext);
+      pcmMixNode.connect(pcmCaptureNode);
+      pcmCaptureNode.connect(audioContext.destination);
+    } catch (error) {
+      console.warn(
+        "AudioWorklet PCM capture unavailable, falling back to ScriptProcessorNode:",
+        error.message || error,
+      );
 
-    pcmMixNode.connect(scriptProcessor);
-    scriptProcessor.connect(audioContext.destination);
+      const bufferSize = 4096;
+      const fallbackProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      fallbackProcessor.onaudioprocess = (event) => {
+        const inputData = event.inputBuffer.getChannelData(0);
+        pcmChunks.push(new Float32Array(inputData));
+      };
+      pcmCaptureNode = fallbackProcessor;
+      pcmMixNode.connect(pcmCaptureNode);
+      pcmCaptureNode.connect(audioContext.destination);
+    }
 
     // Build recording stream: mixed audio + optional tab video
     const finalRecordingTracks = [...destination.stream.getAudioTracks()];
@@ -523,9 +559,12 @@ function cleanup() {
     chunkSaveInterval = null;
   }
 
-  if (scriptProcessor) {
-    scriptProcessor.disconnect();
-    scriptProcessor = null;
+  if (pcmCaptureNode) {
+    if (pcmCaptureNode.port) {
+      pcmCaptureNode.port.onmessage = null;
+    }
+    pcmCaptureNode.disconnect();
+    pcmCaptureNode = null;
   }
 
   recorder = undefined;
@@ -602,19 +641,7 @@ async function savePcmChunk() {
       int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
     }
 
-    // Convert to base64 for storage (process in chunks to avoid stack overflow)
-    const uint8Array = new Uint8Array(int16Array.buffer);
-    let binary = "";
-    const chunkSize = 8192; // Process 8KB at a time
-    for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      const chunk = uint8Array.subarray(
-        i,
-        Math.min(i + chunkSize, uint8Array.length),
-      );
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-    const base64 = btoa(binary);
-    const dataUrl = `data:application/octet-stream;base64,${base64}`;
+    const pcmChunkBuffer = int16Array.buffer.slice(0);
 
     const chunkNumber = await getNextChunkNumber();
     const chunkTimestamp = Date.now();
@@ -634,7 +661,7 @@ async function savePcmChunk() {
     }
 
     const chunkKey = `${currentRecordingId}-chunk-${chunkNumber}`;
-    await window.StorageUtils.saveRecording(dataUrl, {
+    await window.StorageUtils.saveRecording(pcmChunkBuffer, {
       key: chunkKey,
       source: "recording-chunk",
       parentRecordingId: currentRecordingId,
@@ -721,13 +748,13 @@ async function finalizeRecording() {
     );
 
     // Build optional preview/download media payload (audio-only or tab video WebM)
-    let mediaDataUrl = null;
+    let mediaPayload = null;
     let mediaBlobSize = 0;
     if (isRecordingVideo && data.length > 0) {
       try {
         const mediaBlob = new Blob(data, { type: recordingMimeType || "audio/webm" });
         mediaBlobSize = mediaBlob.size;
-        mediaDataUrl = await blobToDataUrl(mediaBlob);
+        mediaPayload = mediaBlob;
       } catch (error) {
         console.warn("Failed to build preview/download media blob:", error);
       }
@@ -741,7 +768,7 @@ async function finalizeRecording() {
 
     await dbModule.saveRecording(currentRecordingId, {
       key: currentRecordingId,
-      data: mediaDataUrl,
+      data: mediaPayload,
       source: "recording",
       timestamp: recordingStartTime,
       duration: estimatedDuration,

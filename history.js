@@ -4,6 +4,7 @@ let currentlyPlayingAudio = null;
 let currentlyPlayingButton = null;
 let chunkPlaybackState = null; // Track sequential chunk playback
 let userSettingsCache = null;
+const EMPTY_AUDIO_DATA_URL = "data:audio/webm;base64,";
 
 async function loadUserSettingsCache() {
   try {
@@ -18,6 +19,32 @@ async function loadUserSettingsCache() {
     );
     userSettingsCache = null;
   }
+}
+
+function hasPersistedMediaPayload(payload) {
+  return !!payload && !(typeof payload === "string" && payload === EMPTY_AUDIO_DATA_URL);
+}
+
+async function payloadToArrayBuffer(payload) {
+  if (!payload) {
+    throw new Error("No payload available");
+  }
+  if (payload instanceof ArrayBuffer) {
+    return payload;
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength,
+    );
+  }
+  if (payload instanceof Blob) {
+    return payload.arrayBuffer();
+  }
+  if (typeof payload === "string") {
+    return dataURLtoBlob(payload).arrayBuffer();
+  }
+  throw new Error("Unsupported payload type");
 }
 
 // Helper function to get chunk duration from constants
@@ -380,11 +407,7 @@ async function downloadRecording(recordingKey, recordingId) {
   const dateStr = date.toISOString().slice(0, 19).replace(/[T:]/g, "-");
 
   // Prefer original captured tab video when available
-  if (
-    recording.hasVideo &&
-    recording.data &&
-    recording.data !== "data:audio/webm;base64,"
-  ) {
+  if (recording.hasVideo && hasPersistedMediaPayload(recording.data)) {
     const blob = dataURLtoBlob(recording.data);
     const filename = `tabtalk-${dateStr}.webm`;
     downloadBlob(blob, filename);
@@ -396,11 +419,7 @@ async function downloadRecording(recordingKey, recordingId) {
 
   // For PCM recordings, always convert to WAV (has proper duration)
   // For non-PCM recordings with WebM data, download WebM directly
-  if (
-    recording.data &&
-    recording.data !== "data:audio/webm;base64," &&
-    !recording.isPcm
-  ) {
+  if (hasPersistedMediaPayload(recording.data) && !recording.isPcm) {
     // Download the WebM directly (old format, non-PCM continuous recording)
     const blob = dataURLtoBlob(recording.data);
     const filename = `tabtalk-${dateStr}.webm`;
@@ -510,13 +529,9 @@ async function convertPcmChunksToWav(
   let totalProcessedSamples = 0;
 
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
-    // Decode base64 data
-    const base64Data = chunks[chunkIdx].data.split(",")[1];
-    const binaryString = atob(base64Data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let j = 0; j < binaryString.length; j++) {
-      bytes[j] = binaryString.charCodeAt(j);
-    }
+    const bytes = new Uint8Array(
+      await payloadToArrayBuffer(chunks[chunkIdx].data),
+    );
 
     // Parse based on format
     let pcmSamples;
@@ -984,8 +999,7 @@ async function loadHistory(skipRecovery = false) {
     // Modern PCM recordings with chunks - convert to WAV on-demand
     // Note: Some old recordings may not have isPcm flag set, so we also check if it has chunks but no data
     const hasChunks = recording.chunksCount > 0 || recording.chunkCount > 0;
-    const hasNoData =
-      !recording.data || recording.data === "data:audio/webm;base64,";
+    const hasNoData = !hasPersistedMediaPayload(recording.data);
     const isPcmWithChunks =
       ((recording.isPcm && hasChunks) || (hasChunks && hasNoData && !isUploaded)) &&
       !recording.hasVideo;
@@ -993,7 +1007,7 @@ async function loadHistory(skipRecovery = false) {
     const hasSavedVideoMedia =
       recording.hasVideo &&
       (recording._dataStripped ||
-        (recording.data && recording.data !== "data:audio/webm;base64,"));
+        hasPersistedMediaPayload(recording.data));
 
     let audioSrc = null;
     let estimatedDuration = recording.duration || null;
@@ -1010,7 +1024,7 @@ async function loadHistory(skipRecovery = false) {
       estimatedDuration = recording.duration;
     } else if (
       recording._dataStripped ||
-      (recording.data && recording.data !== "data:audio/webm;base64,")
+      hasPersistedMediaPayload(recording.data)
     ) {
       // Uploaded file or old recording with data - lazy-load on play
       audioSrc = "pending-load";
@@ -1305,7 +1319,7 @@ async function transcribeAudio(recordingId) {
     const hasChunks = await recordingHasChunks(key);
 
     // For non-chunked recordings, we need the data field
-    if (!recording.data && !hasChunks) {
+    if (!hasPersistedMediaPayload(recording.data) && !hasChunks) {
       throw new Error("Recording data not found");
     }
 
@@ -1774,11 +1788,7 @@ historyList.addEventListener("click", async (e) => {
           const recording =
             await window.StorageUtils.getRecording(recordingKey);
 
-          if (
-            !recording ||
-            !recording.data ||
-            recording.data === "data:audio/webm;base64,"
-          ) {
+          if (!recording || !hasPersistedMediaPayload(recording.data)) {
             throw new Error("No audio data available");
           }
 
@@ -2144,6 +2154,26 @@ historyList.addEventListener("click", async (e) => {
 
 // Helper function to convert data URL to Blob without fetch (avoids CSP issues)
 function dataURLtoBlob(dataURL) {
+  if (dataURL instanceof Blob) {
+    return dataURL;
+  }
+  if (dataURL instanceof ArrayBuffer) {
+    return new Blob([dataURL], { type: "application/octet-stream" });
+  }
+  if (ArrayBuffer.isView(dataURL)) {
+    return new Blob(
+      [
+        dataURL.buffer.slice(
+          dataURL.byteOffset,
+          dataURL.byteOffset + dataURL.byteLength,
+        ),
+      ],
+      { type: "application/octet-stream" },
+    );
+  }
+  if (typeof dataURL !== "string") {
+    throw new Error("Unsupported payload type");
+  }
   const base64Marker = ";base64,";
   const markerIndex = dataURL.indexOf(base64Marker);
   if (markerIndex === -1) {

@@ -7,6 +7,15 @@ const DB_NAME = 'ChromeRecorderDB';
 const DB_VERSION = 1;
 const RECORDINGS_STORE = 'recordings';
 
+function estimatePayloadSizeBytes(data) {
+  if (!data) return 0;
+  if (typeof data === 'string') return data.length;
+  if (data instanceof Blob) return data.size;
+  if (data instanceof ArrayBuffer) return data.byteLength;
+  if (ArrayBuffer.isView(data)) return data.byteLength;
+  return 0;
+}
+
 class IndexedDBManager {
   constructor() {
     this.db = null;
@@ -349,10 +358,7 @@ class IndexedDBManager {
     let totalSize = 0;
     recordings.forEach(recording => {
       // Estimate size of the recording data
-      if (recording.data) {
-        // For data URLs, the base64 portion is the actual data
-        totalSize += recording.data.length;
-      }
+      totalSize += estimatePayloadSizeBytes(recording.data);
       if (recording.transcription) {
         totalSize += recording.transcription.length * 2; // Rough estimate for string size
       }
