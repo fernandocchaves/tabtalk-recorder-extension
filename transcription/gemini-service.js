@@ -2,6 +2,10 @@
 // Simple, reliable, and accurate transcription with FREE tier
 
 class GeminiTranscriptionService extends BaseTranscriptionService {
+  static get providerType() {
+    return "gemini";
+  }
+
   constructor() {
     super();
     this.apiKey = null;

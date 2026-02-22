@@ -1,19 +1,96 @@
 let recorder;
-let data = [];
 let activeStreams = [];
 let recordingStartTime = null;
 let chunkSaveInterval = null;
 let currentRecordingId = null;
 let audioContext = null;
 let destination = null;
-let pcmChunks = []; // Store PCM Float32Array chunks
 let pcmCaptureNode = null;
-let lastSavedPcmIndex = 0; // Track which PCM chunks we've saved
 let sampleRate = 48000;
 let numberOfChannels = 1;
 let autoTranscriptionTasks = new Map();
 let isRecordingVideo = false;
 let recordingMimeType = "audio/webm";
+
+class MediaRecorderChunkCollector {
+  constructor() {
+    this._chunks = [];
+  }
+
+  add(blobPart) {
+    if (blobPart?.size > 0) {
+      this._chunks.push(blobPart);
+    }
+  }
+
+  hasData() {
+    return this._chunks.length > 0;
+  }
+
+  buildBlob(mimeType) {
+    if (!this.hasData()) return null;
+    return new Blob(this._chunks, { type: mimeType || "audio/webm" });
+  }
+
+  reset() {
+    this._chunks = [];
+  }
+}
+
+class PcmChunkAccumulator {
+  constructor() {
+    this.reset();
+  }
+
+  push(chunk) {
+    if (chunk instanceof Float32Array && chunk.length > 0) {
+      this._chunks.push(chunk);
+    }
+  }
+
+  hasAny() {
+    return this._chunks.length > 0;
+  }
+
+  getPendingCount() {
+    return this._chunks.length - this._lastSavedIndex;
+  }
+
+  getPendingChunks() {
+    return this._chunks.slice(this._lastSavedIndex);
+  }
+
+  markAllSaved() {
+    this._lastSavedIndex = this._chunks.length;
+  }
+
+  toInt16Array(chunks = this.getPendingChunks()) {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const concatenated = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      concatenated.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const int16Array = new Int16Array(totalLength);
+    for (let i = 0; i < totalLength; i++) {
+      const sample = concatenated[i];
+      const clamped = Math.max(-1, Math.min(1, sample));
+      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+    }
+
+    return int16Array;
+  }
+
+  reset() {
+    this._chunks = [];
+    this._lastSavedIndex = 0;
+  }
+}
+
+const mediaChunkCollector = new MediaRecorderChunkCollector();
+const pcmChunkAccumulator = new PcmChunkAccumulator();
 
 // Get constants from centralized config (loaded via constants.js)
 const getChunkIntervalMs = () =>
@@ -46,15 +123,15 @@ async function createPcmCaptureNode(audioContext) {
 
     const { samples } = event.data;
     if (samples instanceof Float32Array) {
-      pcmChunks.push(samples);
+      pcmChunkAccumulator.push(samples);
       return;
     }
     if (samples instanceof ArrayBuffer) {
-      pcmChunks.push(new Float32Array(samples));
+      pcmChunkAccumulator.push(new Float32Array(samples));
       return;
     }
     if (ArrayBuffer.isView(samples)) {
-      pcmChunks.push(new Float32Array(samples.buffer.slice(0)));
+      pcmChunkAccumulator.push(new Float32Array(samples.buffer.slice(0)));
     }
   };
 
@@ -101,6 +178,32 @@ async function storageBridgeGet(keys) {
   }
 
   return response.data || {};
+}
+
+async function waitForStorageUtils(maxAttempts = 100, delayMs = 50) {
+  let attempts = 0;
+  while (!window.StorageUtils && attempts < maxAttempts) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    attempts++;
+  }
+
+  if (!window.StorageUtils) {
+    throw new Error("StorageUtils not available");
+  }
+
+  return window.StorageUtils;
+}
+
+function buildFinalRecordedMediaPayload() {
+  if (!isRecordingVideo || !mediaChunkCollector.hasData()) {
+    return { mediaPayload: null, mediaBlobSize: 0 };
+  }
+
+  const mediaBlob = mediaChunkCollector.buildBlob(recordingMimeType);
+  return {
+    mediaPayload: mediaBlob,
+    mediaBlobSize: mediaBlob?.size || 0,
+  };
 }
 
 async function loadOffscreenUserConfig() {
@@ -192,17 +295,8 @@ async function runAutoTranscriptionIfEnabled(recordingKey) {
       const service = await getOffscreenTranscriptionService();
       const transcriptionText = await service.transcribeChunked(recordingKey);
 
-      let attempts = 0;
-      while (!window.StorageUtils && attempts < 100) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        attempts++;
-      }
-
-      if (!window.StorageUtils) {
-        throw new Error("StorageUtils not available to save transcription");
-      }
-
-      await window.StorageUtils.updateTranscription(
+      const storageUtils = await waitForStorageUtils();
+      await storageUtils.updateTranscription(
         recordingKey,
         transcriptionText,
       );
@@ -275,19 +369,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function handleStorageOperation(message, sendResponse) {
   try {
-    let attempts = 0;
-    while (!window.StorageUtils && attempts < 100) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      attempts++;
-    }
-
-    if (!window.StorageUtils) {
-      throw new Error("StorageUtils not available after waiting");
-    }
+    const storageUtils = await waitForStorageUtils();
 
     switch (message.type) {
       case "indexeddb-save":
-        const key = await window.StorageUtils.saveRecording(
+        const key = await storageUtils.saveRecording(
           message.data.mediaPayload ?? message.data.audioDataUrl,
           message.data.metadata,
         );
@@ -295,12 +381,12 @@ async function handleStorageOperation(message, sendResponse) {
         break;
 
       case "indexeddb-getall":
-        const recordings = await window.StorageUtils.getAllRecordings();
+        const recordings = await storageUtils.getAllRecordings();
         sendResponse({ success: true, recordings });
         break;
 
       case "indexeddb-delete":
-        await window.StorageUtils.deleteRecording(message.data.key);
+        await storageUtils.deleteRecording(message.data.key);
         sendResponse({ success: true });
         break;
 
@@ -438,7 +524,7 @@ async function startRecording(streamId) {
       const fallbackProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
       fallbackProcessor.onaudioprocess = (event) => {
         const inputData = event.inputBuffer.getChannelData(0);
-        pcmChunks.push(new Float32Array(inputData));
+        pcmChunkAccumulator.push(new Float32Array(inputData));
       };
       pcmCaptureNode = fallbackProcessor;
       pcmMixNode.connect(pcmCaptureNode);
@@ -476,9 +562,7 @@ async function startRecording(streamId) {
     });
 
     recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        data.push(event.data);
-      }
+      mediaChunkCollector.add(event.data);
     };
 
     recorder.onstop = async () => {
@@ -568,9 +652,8 @@ function cleanup() {
   }
 
   recorder = undefined;
-  data = [];
-  pcmChunks = [];
-  lastSavedPcmIndex = 0;
+  mediaChunkCollector.reset();
+  pcmChunkAccumulator.reset();
   recordingStartTime = null;
   currentRecordingId = null;
   audioContext = null;
@@ -609,38 +692,22 @@ async function stopAllStreams() {
 
 // Save PCM chunk for crash recovery (incremental, concatenatable)
 async function savePcmChunk() {
-  // Skip if pcmChunks is not initialized (recovery scenario)
-  if (!pcmChunks || pcmChunks.length === 0) {
+  // Skip when no PCM frames were captured yet (e.g. recovery/fresh start)
+  if (!pcmChunkAccumulator.hasAny()) {
     return;
   }
 
-  const newChunksCount = pcmChunks.length - lastSavedPcmIndex;
+  const newChunksCount = pcmChunkAccumulator.getPendingCount();
 
   if (newChunksCount <= 0) {
     return;
   }
 
-  const newChunks = pcmChunks.slice(lastSavedPcmIndex);
+  const newChunks = pcmChunkAccumulator.getPendingChunks();
 
   try {
-    // Concatenate PCM chunks into single Float32Array
-    const totalLength = newChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const concatenated = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of newChunks) {
-      concatenated.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    // Convert Float32 to Int16 for storage (half the size)
-    const int16Array = new Int16Array(totalLength);
-    for (let i = 0; i < totalLength; i++) {
-      const sample = concatenated[i];
-      // Clamp to [-1, 1] and convert to Int16 range
-      const clamped = Math.max(-1, Math.min(1, sample));
-      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-    }
-
+    const int16Array = pcmChunkAccumulator.toInt16Array(newChunks);
+    const totalLength = int16Array.length;
     const pcmChunkBuffer = int16Array.buffer.slice(0);
 
     const chunkNumber = await getNextChunkNumber();
@@ -650,18 +717,10 @@ async function savePcmChunk() {
       `Saving PCM chunk ${chunkNumber} (${((totalLength * 2) / 1024).toFixed(2)} KB, ${newChunksCount} buffers)`,
     );
 
-    let attempts = 0;
-    while (!window.StorageUtils && attempts < 100) {
-      await new Promise((r) => setTimeout(r, 50));
-      attempts++;
-    }
-
-    if (!window.StorageUtils) {
-      throw new Error("StorageUtils not available");
-    }
+    const storageUtils = await waitForStorageUtils();
 
     const chunkKey = `${currentRecordingId}-chunk-${chunkNumber}`;
-    await window.StorageUtils.saveRecording(pcmChunkBuffer, {
+    await storageUtils.saveRecording(pcmChunkBuffer, {
       key: chunkKey,
       source: "recording-chunk",
       parentRecordingId: currentRecordingId,
@@ -675,7 +734,7 @@ async function savePcmChunk() {
     });
 
     console.log(`PCM chunk ${chunkNumber} saved successfully`);
-    lastSavedPcmIndex = pcmChunks.length;
+    pcmChunkAccumulator.markAllSaved();
   } catch (error) {
     console.error("Failed to save PCM chunk:", error);
   }
@@ -683,11 +742,8 @@ async function savePcmChunk() {
 
 async function getNextChunkNumber() {
   try {
-    if (!window.StorageUtils) {
-      return 0;
-    }
-
-    const allRecordings = await window.StorageUtils.getAllRecordings();
+    const storageUtils = await waitForStorageUtils();
+    const allRecordings = await storageUtils.getAllRecordings();
     const chunks = allRecordings.filter(
       (r) =>
         r.source === "recording-chunk" &&
@@ -708,18 +764,10 @@ async function finalizeRecording() {
     // Save any remaining PCM data
     await savePcmChunk();
 
-    let attempts = 0;
-    while (!window.StorageUtils && attempts < 100) {
-      await new Promise((r) => setTimeout(r, 50));
-      attempts++;
-    }
-
-    if (!window.StorageUtils) {
-      throw new Error("StorageUtils not available");
-    }
+    const storageUtils = await waitForStorageUtils();
 
     // Get all chunks for this recording
-    const allRecordings = await window.StorageUtils.getAllRecordings();
+    const allRecordings = await storageUtils.getAllRecordings();
     const chunks = allRecordings
       .filter(
         (r) =>
@@ -750,14 +798,10 @@ async function finalizeRecording() {
     // Build optional preview/download media payload (audio-only or tab video WebM)
     let mediaPayload = null;
     let mediaBlobSize = 0;
-    if (isRecordingVideo && data.length > 0) {
-      try {
-        const mediaBlob = new Blob(data, { type: recordingMimeType || "audio/webm" });
-        mediaBlobSize = mediaBlob.size;
-        mediaPayload = mediaBlob;
-      } catch (error) {
-        console.warn("Failed to build preview/download media blob:", error);
-      }
+    try {
+      ({ mediaPayload, mediaBlobSize } = buildFinalRecordedMediaPayload());
+    } catch (error) {
+      console.warn("Failed to build preview/download media blob:", error);
     }
 
     // Save the final recording metadata; keep PCM chunks for transcription/download conversion

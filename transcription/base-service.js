@@ -39,12 +39,17 @@ class BaseTranscriptionService {
    */
   getInfo() {
     return {
+      providerType: this.constructor.providerType || 'unknown',
       name: 'Unknown',
       requiresApiKey: false,
       requiresInternet: false,
       cost: 'Unknown',
       accuracy: 'Unknown'
     };
+  }
+
+  static get providerType() {
+    return 'base';
   }
 }
 
