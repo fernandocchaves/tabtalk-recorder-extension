@@ -15,19 +15,31 @@ let autoTranscriptionTasks = new Map();
 
 // Get constants from centralized config (loaded via constants.js)
 const getChunkIntervalMs = () =>
-  window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
+  window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 300000;
 const getCrashRecoveryIntervalMs = () =>
   window.RECORDING_CONSTANTS?.CRASH_RECOVERY_INTERVAL_MS || 10000;
 
 function toBooleanSetting(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
-    if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+    if (
+      normalized === "true" ||
+      normalized === "1" ||
+      normalized === "yes" ||
+      normalized === "on"
+    )
+      return true;
+    if (
+      normalized === "false" ||
+      normalized === "0" ||
+      normalized === "no" ||
+      normalized === "off"
+    )
+      return false;
   }
-  if (typeof value === 'number') return value !== 0;
+  if (typeof value === "number") return value !== 0;
   return Boolean(value);
 }
 
@@ -37,49 +49,53 @@ async function storageBridgeGet(keys) {
   }
 
   const response = await chrome.runtime.sendMessage({
-    type: 'storage-get',
-    target: 'service-worker-storage',
-    keys
+    type: "storage-get",
+    target: "service-worker-storage",
+    keys,
   });
 
   if (!response?.success) {
-    throw new Error(response?.error || 'storage-get bridge failed');
+    throw new Error(response?.error || "storage-get bridge failed");
   }
 
   return response.data || {};
 }
 
 async function loadOffscreenUserConfig() {
-  const defaults = (typeof window !== 'undefined' && window.DEFAULT_CONFIG)
-    ? { ...window.DEFAULT_CONFIG }
-    : {
-        tabGain: 1.0,
-        micGain: 1.5,
-        audioQuality: 48000,
-        enableMicrophoneCapture: false,
-        autoTranscribe: false,
-        transcriptionChunkIntervalMs: 60000,
-        geminiTranscriptionMaxOutputTokens: 16384
-      };
+  const defaults =
+    typeof window !== "undefined" && window.DEFAULT_CONFIG
+      ? { ...window.DEFAULT_CONFIG }
+      : {
+          tabGain: 1.0,
+          micGain: 1.5,
+          audioQuality: 48000,
+          enableMicrophoneCapture: false,
+          autoTranscribe: false,
+          transcriptionChunkIntervalMs: 60000,
+          geminiTranscriptionMaxOutputTokens: 16384,
+        };
 
   // Prefer direct read with literal key in offscreen context (more robust than relying on shared globals)
   try {
-    const result = await storageBridgeGet('user_settings');
-    if (result?.user_settings && typeof result.user_settings === 'object') {
+    const result = await storageBridgeGet("user_settings");
+    if (result?.user_settings && typeof result.user_settings === "object") {
       return { ...defaults, ...result.user_settings };
     }
   } catch (error) {
-    console.warn('[CONFIG] Direct user_settings read failed in offscreen:', error);
+    console.warn(
+      "[CONFIG] Direct user_settings read failed in offscreen:",
+      error,
+    );
   }
 
   // Fallback to ConfigManager if available
   try {
-    if (typeof ConfigManager !== 'undefined') {
+    if (typeof ConfigManager !== "undefined") {
       const configManager = new ConfigManager();
       return await configManager.load();
     }
   } catch (error) {
-    console.warn('[CONFIG] ConfigManager fallback failed in offscreen:', error);
+    console.warn("[CONFIG] ConfigManager fallback failed in offscreen:", error);
   }
 
   return defaults;
@@ -90,36 +106,42 @@ async function getOffscreenTranscriptionService() {
     return window.offscreenTranscriptionService;
   }
 
-  if (typeof TranscriptionServiceFactory !== 'undefined') {
-    const serviceType = await TranscriptionServiceFactory.getConfiguredService();
-    window.offscreenTranscriptionService = TranscriptionServiceFactory.create(serviceType);
+  if (typeof TranscriptionServiceFactory !== "undefined") {
+    const serviceType =
+      await TranscriptionServiceFactory.getConfiguredService();
+    window.offscreenTranscriptionService =
+      TranscriptionServiceFactory.create(serviceType);
     return window.offscreenTranscriptionService;
   }
 
-  if (typeof GeminiTranscriptionService !== 'undefined') {
+  if (typeof GeminiTranscriptionService !== "undefined") {
     window.offscreenTranscriptionService = new GeminiTranscriptionService();
     return window.offscreenTranscriptionService;
   }
 
-  throw new Error('No transcription service available in offscreen context');
+  throw new Error("No transcription service available in offscreen context");
 }
 
 async function runAutoTranscriptionIfEnabled(recordingKey) {
   if (!recordingKey) return;
-  if (autoTranscriptionTasks.has(recordingKey)) return autoTranscriptionTasks.get(recordingKey);
+  if (autoTranscriptionTasks.has(recordingKey))
+    return autoTranscriptionTasks.get(recordingKey);
 
   const task = (async () => {
     try {
       const userConfig = await loadOffscreenUserConfig();
 
       if (!toBooleanSetting(userConfig.autoTranscribe, false)) {
-        console.log('[AUTO TRANSCRIBE] Disabled in settings');
+        console.log("[AUTO TRANSCRIBE] Disabled in settings");
         return;
       }
 
-      const { gemini_api_key: apiKey } = await storageBridgeGet('gemini_api_key');
+      const { gemini_api_key: apiKey } =
+        await storageBridgeGet("gemini_api_key");
       if (!apiKey) {
-        console.warn('[AUTO TRANSCRIBE] Skipped: Gemini API key not configured');
+        console.warn(
+          "[AUTO TRANSCRIBE] Skipped: Gemini API key not configured",
+        );
         return;
       }
 
@@ -129,26 +151,31 @@ async function runAutoTranscriptionIfEnabled(recordingKey) {
 
       let attempts = 0;
       while (!window.StorageUtils && attempts < 100) {
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
         attempts++;
       }
 
       if (!window.StorageUtils) {
-        throw new Error('StorageUtils not available to save transcription');
+        throw new Error("StorageUtils not available to save transcription");
       }
 
-      await window.StorageUtils.updateTranscription(recordingKey, transcriptionText);
+      await window.StorageUtils.updateTranscription(
+        recordingKey,
+        transcriptionText,
+      );
 
-      if (typeof service.clearTranscriptionState === 'function') {
+      if (typeof service.clearTranscriptionState === "function") {
         await service.clearTranscriptionState(recordingKey);
       }
 
-      console.log(`[AUTO TRANSCRIBE] Completed for ${recordingKey} (${transcriptionText.length} chars)`);
+      console.log(
+        `[AUTO TRANSCRIBE] Completed for ${recordingKey} (${transcriptionText.length} chars)`,
+      );
 
       chrome.runtime.sendMessage({
-        type: 'transcription-updated',
-        target: 'history',
-        data: { recordingKey }
+        type: "transcription-updated",
+        target: "history",
+        data: { recordingKey },
       });
     } catch (error) {
       console.error(`[AUTO TRANSCRIBE] Failed for ${recordingKey}:`, error);
@@ -174,7 +201,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         // Handle incomplete recording finalization
         (async () => {
           try {
-            console.log('Finalizing incomplete recording:', message.data);
+            console.log("Finalizing incomplete recording:", message.data);
             currentRecordingId = message.data.recordingId;
             recordingStartTime = message.data.recordingStartTime;
 
@@ -186,10 +213,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             await finalizeRecording();
             cleanup();
 
-            console.log('Incomplete recording finalized successfully');
+            console.log("Incomplete recording finalized successfully");
             sendResponse({ success: true });
           } catch (error) {
-            console.error('Error finalizing incomplete recording:', error);
+            console.error("Error finalizing incomplete recording:", error);
             sendResponse({ success: false, error: error.message });
           }
         })();
@@ -207,38 +234,38 @@ async function handleStorageOperation(message, sendResponse) {
   try {
     let attempts = 0;
     while (!window.StorageUtils && attempts < 100) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       attempts++;
     }
 
     if (!window.StorageUtils) {
-      throw new Error('StorageUtils not available after waiting');
+      throw new Error("StorageUtils not available after waiting");
     }
 
     switch (message.type) {
-      case 'indexeddb-save':
+      case "indexeddb-save":
         const key = await window.StorageUtils.saveRecording(
           message.data.audioDataUrl,
-          message.data.metadata
+          message.data.metadata,
         );
         sendResponse({ success: true, key });
         break;
 
-      case 'indexeddb-getall':
+      case "indexeddb-getall":
         const recordings = await window.StorageUtils.getAllRecordings();
         sendResponse({ success: true, recordings });
         break;
 
-      case 'indexeddb-delete':
+      case "indexeddb-delete":
         await window.StorageUtils.deleteRecording(message.data.key);
         sendResponse({ success: true });
         break;
 
       default:
-        sendResponse({ error: 'Unknown storage operation' });
+        sendResponse({ error: "Unknown storage operation" });
     }
   } catch (error) {
-    console.error('Storage operation failed:', error);
+    console.error("Storage operation failed:", error);
     sendResponse({ error: error.message });
   }
 }
@@ -267,7 +294,10 @@ async function startRecording(streamId) {
 
     // Load full config for other settings (audio quality, gains, mic capture, etc)
     const userConfig = await loadOffscreenUserConfig();
-    const enableMicrophoneCapture = toBooleanSetting(userConfig.enableMicrophoneCapture, false);
+    const enableMicrophoneCapture = toBooleanSetting(
+      userConfig.enableMicrophoneCapture,
+      false,
+    );
 
     if (enableMicrophoneCapture) {
       try {
@@ -280,13 +310,13 @@ async function startRecording(streamId) {
           video: false,
         });
         activeStreams.push(micStream);
-        console.log('Microphone enabled');
+        console.log("Microphone enabled");
       } catch (error) {
-        console.warn('Failed to get microphone stream:', error.message);
+        console.warn("Failed to get microphone stream:", error.message);
         micStream = null;
       }
     } else {
-      console.log('Recording tab audio only (microphone disabled)');
+      console.log("Recording tab audio only (microphone disabled)");
     }
 
     activeStreams.push(tabStream);
@@ -299,11 +329,15 @@ async function startRecording(streamId) {
     sampleRate = audioContext.sampleRate;
     numberOfChannels = 1; // Mono for simplicity
 
-    console.log(`Audio context created with sample rate: ${sampleRate} Hz (requested: ${desiredSampleRate} Hz)`);
+    console.log(
+      `Audio context created with sample rate: ${sampleRate} Hz (requested: ${desiredSampleRate} Hz)`,
+    );
 
     // Create sources
     const tabSource = audioContext.createMediaStreamSource(tabStream);
-    const micSource = micStream ? audioContext.createMediaStreamSource(micStream) : null;
+    const micSource = micStream
+      ? audioContext.createMediaStreamSource(micStream)
+      : null;
     destination = audioContext.createMediaStreamDestination();
 
     // Create gain nodes with user settings
@@ -359,7 +393,7 @@ async function startRecording(streamId) {
     };
 
     recorder.onstop = async () => {
-      console.log('Recorder stopped. Finalizing...');
+      console.log("Recorder stopped. Finalizing...");
       await finalizeRecording();
       cleanup();
     };
@@ -372,11 +406,11 @@ async function startRecording(streamId) {
     recordingStartTime = Date.now();
     currentRecordingId = `recording-${recordingStartTime}`;
 
-    console.log('Recording started:', {
+    console.log("Recording started:", {
       recordingStartTime,
       activeRecordingId: currentRecordingId,
       sampleRate,
-      numberOfChannels
+      numberOfChannels,
     });
 
     // Store recording state
@@ -385,8 +419,8 @@ async function startRecording(streamId) {
       target: "service-worker",
       data: {
         recordingStartTime: recordingStartTime,
-        activeRecordingId: currentRecordingId
-      }
+        activeRecordingId: currentRecordingId,
+      },
     });
 
     // Set up periodic chunk saving (PCM data for crash recovery)
@@ -395,7 +429,7 @@ async function startRecording(streamId) {
       chunkSaveInterval = setInterval(() => {
         savePcmChunk();
       }, chunkIntervalMs);
-      console.log('PCM chunk save interval set up:', chunkIntervalMs, 'ms');
+      console.log("PCM chunk save interval set up:", chunkIntervalMs, "ms");
     }
 
     chrome.runtime.sendMessage({
@@ -403,7 +437,6 @@ async function startRecording(streamId) {
       target: "service-worker",
       recording: true,
     });
-
   } catch (error) {
     console.error("Error starting recording:", error);
     chrome.runtime.sendMessage({
@@ -502,15 +535,18 @@ async function savePcmChunk() {
       const sample = concatenated[i];
       // Clamp to [-1, 1] and convert to Int16 range
       const clamped = Math.max(-1, Math.min(1, sample));
-      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
     }
 
     // Convert to base64 for storage (process in chunks to avoid stack overflow)
     const uint8Array = new Uint8Array(int16Array.buffer);
-    let binary = '';
+    let binary = "";
     const chunkSize = 8192; // Process 8KB at a time
     for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
+      const chunk = uint8Array.subarray(
+        i,
+        Math.min(i + chunkSize, uint8Array.length),
+      );
       binary += String.fromCharCode.apply(null, chunk);
     }
     const base64 = btoa(binary);
@@ -519,22 +555,24 @@ async function savePcmChunk() {
     const chunkNumber = await getNextChunkNumber();
     const chunkTimestamp = Date.now();
 
-    console.log(`Saving PCM chunk ${chunkNumber} (${(totalLength * 2 / 1024).toFixed(2)} KB, ${newChunksCount} buffers)`);
+    console.log(
+      `Saving PCM chunk ${chunkNumber} (${((totalLength * 2) / 1024).toFixed(2)} KB, ${newChunksCount} buffers)`,
+    );
 
     let attempts = 0;
     while (!window.StorageUtils && attempts < 100) {
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       attempts++;
     }
 
     if (!window.StorageUtils) {
-      throw new Error('StorageUtils not available');
+      throw new Error("StorageUtils not available");
     }
 
     const chunkKey = `${currentRecordingId}-chunk-${chunkNumber}`;
     await window.StorageUtils.saveRecording(dataUrl, {
       key: chunkKey,
-      source: 'recording-chunk',
+      source: "recording-chunk",
       parentRecordingId: currentRecordingId,
       chunkNumber: chunkNumber,
       chunkSize: totalLength * 2, // Int16 = 2 bytes per sample
@@ -542,14 +580,13 @@ async function savePcmChunk() {
       sampleRate: sampleRate,
       numberOfChannels: numberOfChannels,
       samplesCount: totalLength,
-      format: 'pcm-int16'
+      format: "pcm-int16",
     });
 
     console.log(`PCM chunk ${chunkNumber} saved successfully`);
     lastSavedPcmIndex = pcmChunks.length;
-
   } catch (error) {
-    console.error('Failed to save PCM chunk:', error);
+    console.error("Failed to save PCM chunk:", error);
   }
 }
 
@@ -560,63 +597,74 @@ async function getNextChunkNumber() {
     }
 
     const allRecordings = await window.StorageUtils.getAllRecordings();
-    const chunks = allRecordings.filter(r =>
-      r.source === 'recording-chunk' &&
-      r.parentRecordingId === currentRecordingId
+    const chunks = allRecordings.filter(
+      (r) =>
+        r.source === "recording-chunk" &&
+        r.parentRecordingId === currentRecordingId,
     );
 
     return chunks.length;
   } catch (error) {
-    console.error('Error getting chunk number:', error);
+    console.error("Error getting chunk number:", error);
     return 0;
   }
 }
 
 async function finalizeRecording() {
   try {
-    console.log('Finalizing recording...');
+    console.log("Finalizing recording...");
 
     // Save any remaining PCM data
     await savePcmChunk();
 
     let attempts = 0;
     while (!window.StorageUtils && attempts < 100) {
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       attempts++;
     }
 
     if (!window.StorageUtils) {
-      throw new Error('StorageUtils not available');
+      throw new Error("StorageUtils not available");
     }
 
     // Get all chunks for this recording
     const allRecordings = await window.StorageUtils.getAllRecordings();
-    const chunks = allRecordings.filter(r =>
-      r.source === 'recording-chunk' &&
-      r.parentRecordingId === currentRecordingId
-    ).sort((a, b) => a.chunkNumber - b.chunkNumber);
+    const chunks = allRecordings
+      .filter(
+        (r) =>
+          r.source === "recording-chunk" &&
+          r.parentRecordingId === currentRecordingId,
+      )
+      .sort((a, b) => a.chunkNumber - b.chunkNumber);
 
     console.log(`Found ${chunks.length} PCM chunks to finalize`);
 
     if (chunks.length === 0) {
-      console.error('No chunks found for recording');
+      console.error("No chunks found for recording");
       return;
     }
 
     // Calculate total size and duration
-    const totalSamples = chunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
+    const totalSamples = chunks.reduce(
+      (sum, chunk) => sum + (chunk.samplesCount || 0),
+      0,
+    );
     const totalSize = totalSamples * 2; // Int16 = 2 bytes per sample
     const estimatedDuration = Math.floor(totalSamples / sampleRate);
 
-    console.log(`PCM recording: ${chunks.length} chunks, ${totalSamples} samples, ${estimatedDuration}s`);
+    console.log(
+      `PCM recording: ${chunks.length} chunks, ${totalSamples} samples, ${estimatedDuration}s`,
+    );
 
     // Save the final recording metadata (no WebM data needed, PCM chunks are used for playback)
-    const dbModule = await import('./utils/indexeddb.js').then(m => m.default);
+    const dbModule = await import("./utils/indexeddb.js").then(
+      (m) => m.default,
+    );
     await dbModule.init();
 
     await dbModule.saveRecording(currentRecordingId, {
       key: currentRecordingId,
-      source: 'recording',
+      source: "recording",
       timestamp: recordingStartTime,
       duration: estimatedDuration,
       fileSize: totalSize,
@@ -625,18 +673,21 @@ async function finalizeRecording() {
       isPcm: true, // Flag to indicate PCM chunks
       sampleRate: sampleRate,
       numberOfChannels: numberOfChannels,
-      totalSamples: totalSamples
+      totalSamples: totalSamples,
     });
 
     const savedRecordingKey = currentRecordingId;
-    console.log(`✓ Final recording saved: ${chunks.length} PCM chunks, ${estimatedDuration}s, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`✓ Recording saved with key: ${savedRecordingKey}, isPcm: true, sampleRate: ${sampleRate} Hz`);
+    console.log(
+      `✓ Final recording saved: ${chunks.length} PCM chunks, ${estimatedDuration}s, ${(totalSize / 1024 / 1024).toFixed(2)} MB`,
+    );
+    console.log(
+      `✓ Recording saved with key: ${savedRecordingKey}, isPcm: true, sampleRate: ${sampleRate} Hz`,
+    );
 
     // Fire-and-forget auto transcription so recording stop UX is not blocked by API calls
     runAutoTranscriptionIfEnabled(savedRecordingKey);
-
   } catch (error) {
-    console.error('❌ Error finalizing recording:', error);
-    console.error('Stack trace:', error.stack);
+    console.error("❌ Error finalizing recording:", error);
+    console.error("Stack trace:", error.stack);
   }
 }

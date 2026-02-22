@@ -5,12 +5,12 @@ const RECORDING_CONSTANTS = {
   // Transcription segment duration (in milliseconds)
   // Continuous recording is split into segments of this duration during transcription
   // Segments are created on-the-fly from continuous PCM data, not stored separately
-  TRANSCRIPTION_CHUNK_INTERVAL_MS: 300000, // 300 seconds = 1 minute (prevents Gemini token limit issues)
+  TRANSCRIPTION_CHUNK_INTERVAL_MS: 300000, // 300 seconds = 5 minutes
 
   // Crash recovery data save interval (in milliseconds)
   // Raw audio data saved more frequently for crash recovery
   // Set to 0 to disable crash recovery chunks
-  CRASH_RECOVERY_INTERVAL_MS: 60000, // 10 seconds
+  CRASH_RECOVERY_INTERVAL_MS: 60000, // 60 seconds
 
   // Maximum recording duration (in milliseconds)
   // Set to 0 for unlimited
