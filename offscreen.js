@@ -11,12 +11,155 @@ let scriptProcessor = null;
 let lastSavedPcmIndex = 0; // Track which PCM chunks we've saved
 let sampleRate = 48000;
 let numberOfChannels = 1;
+let autoTranscriptionTasks = new Map();
 
 // Get constants from centralized config (loaded via constants.js)
 const getChunkIntervalMs = () =>
   window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
 const getCrashRecoveryIntervalMs = () =>
   window.RECORDING_CONSTANTS?.CRASH_RECOVERY_INTERVAL_MS || 10000;
+
+function toBooleanSetting(value, fallback = false) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+  }
+  if (typeof value === 'number') return value !== 0;
+  return Boolean(value);
+}
+
+async function storageBridgeGet(keys) {
+  if (chrome?.storage?.local) {
+    return chrome.storage.local.get(keys);
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    type: 'storage-get',
+    target: 'service-worker-storage',
+    keys
+  });
+
+  if (!response?.success) {
+    throw new Error(response?.error || 'storage-get bridge failed');
+  }
+
+  return response.data || {};
+}
+
+async function loadOffscreenUserConfig() {
+  const defaults = (typeof window !== 'undefined' && window.DEFAULT_CONFIG)
+    ? { ...window.DEFAULT_CONFIG }
+    : {
+        tabGain: 1.0,
+        micGain: 1.5,
+        audioQuality: 48000,
+        enableMicrophoneCapture: false,
+        autoTranscribe: false,
+        transcriptionChunkIntervalMs: 60000,
+        geminiTranscriptionMaxOutputTokens: 16384
+      };
+
+  // Prefer direct read with literal key in offscreen context (more robust than relying on shared globals)
+  try {
+    const result = await storageBridgeGet('user_settings');
+    if (result?.user_settings && typeof result.user_settings === 'object') {
+      return { ...defaults, ...result.user_settings };
+    }
+  } catch (error) {
+    console.warn('[CONFIG] Direct user_settings read failed in offscreen:', error);
+  }
+
+  // Fallback to ConfigManager if available
+  try {
+    if (typeof ConfigManager !== 'undefined') {
+      const configManager = new ConfigManager();
+      return await configManager.load();
+    }
+  } catch (error) {
+    console.warn('[CONFIG] ConfigManager fallback failed in offscreen:', error);
+  }
+
+  return defaults;
+}
+
+async function getOffscreenTranscriptionService() {
+  if (window.offscreenTranscriptionService) {
+    return window.offscreenTranscriptionService;
+  }
+
+  if (typeof TranscriptionServiceFactory !== 'undefined') {
+    const serviceType = await TranscriptionServiceFactory.getConfiguredService();
+    window.offscreenTranscriptionService = TranscriptionServiceFactory.create(serviceType);
+    return window.offscreenTranscriptionService;
+  }
+
+  if (typeof GeminiTranscriptionService !== 'undefined') {
+    window.offscreenTranscriptionService = new GeminiTranscriptionService();
+    return window.offscreenTranscriptionService;
+  }
+
+  throw new Error('No transcription service available in offscreen context');
+}
+
+async function runAutoTranscriptionIfEnabled(recordingKey) {
+  if (!recordingKey) return;
+  if (autoTranscriptionTasks.has(recordingKey)) return autoTranscriptionTasks.get(recordingKey);
+
+  const task = (async () => {
+    try {
+      const userConfig = await loadOffscreenUserConfig();
+
+      if (!toBooleanSetting(userConfig.autoTranscribe, false)) {
+        console.log('[AUTO TRANSCRIBE] Disabled in settings');
+        return;
+      }
+
+      const { gemini_api_key: apiKey } = await storageBridgeGet('gemini_api_key');
+      if (!apiKey) {
+        console.warn('[AUTO TRANSCRIBE] Skipped: Gemini API key not configured');
+        return;
+      }
+
+      console.log(`[AUTO TRANSCRIBE] Starting for ${recordingKey}`);
+      const service = await getOffscreenTranscriptionService();
+      const transcriptionText = await service.transcribeChunked(recordingKey);
+
+      let attempts = 0;
+      while (!window.StorageUtils && attempts < 100) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        attempts++;
+      }
+
+      if (!window.StorageUtils) {
+        throw new Error('StorageUtils not available to save transcription');
+      }
+
+      await window.StorageUtils.updateTranscription(recordingKey, transcriptionText);
+
+      if (typeof service.clearTranscriptionState === 'function') {
+        await service.clearTranscriptionState(recordingKey);
+      }
+
+      console.log(`[AUTO TRANSCRIBE] Completed for ${recordingKey} (${transcriptionText.length} chars)`);
+
+      chrome.runtime.sendMessage({
+        type: 'transcription-updated',
+        target: 'history',
+        data: { recordingKey }
+      });
+    } catch (error) {
+      console.error(`[AUTO TRANSCRIBE] Failed for ${recordingKey}:`, error);
+    } finally {
+      autoTranscriptionTasks.delete(recordingKey);
+    }
+  })();
+
+  autoTranscriptionTasks.set(recordingKey, task);
+  return task;
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.target === "offscreen") {
@@ -121,23 +264,10 @@ async function startRecording(streamId) {
 
     // Get microphone stream (if enabled in settings)
     let micStream = null;
-    let enableMicrophoneCapture = false; // default - tab audio only
 
-    // Load microphone capture setting from storage
-    try {
-      if (typeof StorageKeys !== 'undefined' && StorageKeys.USER_SETTINGS) {
-        const result = await chrome.storage.local.get(StorageKeys.USER_SETTINGS);
-        if (result[StorageKeys.USER_SETTINGS]) {
-          enableMicrophoneCapture = result[StorageKeys.USER_SETTINGS].enableMicrophoneCapture !== false;
-        }
-      }
-    } catch (error) {
-      console.error('Error loading microphone setting:', error);
-    }
-
-    // Load full config for other settings (audio quality, gains, etc)
-    const configManager = new ConfigManager();
-    const userConfig = await configManager.load();
+    // Load full config for other settings (audio quality, gains, mic capture, etc)
+    const userConfig = await loadOffscreenUserConfig();
+    const enableMicrophoneCapture = toBooleanSetting(userConfig.enableMicrophoneCapture, false);
 
     if (enableMicrophoneCapture) {
       try {
@@ -199,11 +329,11 @@ async function startRecording(streamId) {
     const bufferSize = 4096;
     scriptProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
-    // Mix tab and mic into single channel for PCM capture
-    const merger = audioContext.createChannelMerger(2);
-    tabGain.connect(merger, 0, 0);
+    // Sum tab + mic into one path for PCM capture (channel merger is not for mixing)
+    const pcmMixNode = audioContext.createGain();
+    tabGain.connect(pcmMixNode);
     if (micSource) {
-      micGain.connect(merger, 0, 0);
+      micGain.connect(pcmMixNode);
     }
 
     // Capture PCM data
@@ -214,7 +344,7 @@ async function startRecording(streamId) {
       pcmChunks.push(pcmData);
     };
 
-    merger.connect(scriptProcessor);
+    pcmMixNode.connect(scriptProcessor);
     scriptProcessor.connect(audioContext.destination);
 
     // Also set up MediaRecorder for WebM output (for playback preview)
@@ -498,8 +628,12 @@ async function finalizeRecording() {
       totalSamples: totalSamples
     });
 
+    const savedRecordingKey = currentRecordingId;
     console.log(`✓ Final recording saved: ${chunks.length} PCM chunks, ${estimatedDuration}s, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`✓ Recording saved with key: ${currentRecordingId}, isPcm: true, sampleRate: ${sampleRate} Hz`);
+    console.log(`✓ Recording saved with key: ${savedRecordingKey}, isPcm: true, sampleRate: ${sampleRate} Hz`);
+
+    // Fire-and-forget auto transcription so recording stop UX is not blocked by API calls
+    runAutoTranscriptionIfEnabled(savedRecordingKey);
 
   } catch (error) {
     console.error('❌ Error finalizing recording:', error);

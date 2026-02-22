@@ -2,6 +2,40 @@
 // Supports multiple transcription backends
 
 class TranscriptionServiceFactory {
+  static async _storageGet(keys) {
+    if (chrome?.storage?.local) {
+      return chrome.storage.local.get(keys);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'storage-get',
+      target: 'service-worker-storage',
+      keys
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'storage-get bridge failed');
+    }
+
+    return response.data || {};
+  }
+
+  static async _storageSet(items) {
+    if (chrome?.storage?.local) {
+      return chrome.storage.local.set(items);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'storage-set',
+      target: 'service-worker-storage',
+      items
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'storage-set bridge failed');
+    }
+  }
+
   /**
    * Available service types
    */
@@ -69,7 +103,7 @@ class TranscriptionServiceFactory {
    * @returns {Promise<string>} - Configured service type
    */
   static async getConfiguredService() {
-    const result = await chrome.storage.local.get('transcription_service_type');
+    const result = await TranscriptionServiceFactory._storageGet('transcription_service_type');
     return result.transcription_service_type || TranscriptionServiceFactory.getDefault();
   }
 
@@ -82,7 +116,7 @@ class TranscriptionServiceFactory {
     if (!Object.values(TranscriptionServiceFactory.SERVICES).includes(type)) {
       throw new Error(`Invalid service type: ${type}`);
     }
-    await chrome.storage.local.set({ transcription_service_type: type });
+    await TranscriptionServiceFactory._storageSet({ transcription_service_type: type });
   }
 }
 

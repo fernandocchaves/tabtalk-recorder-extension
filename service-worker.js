@@ -13,6 +13,42 @@ chrome.runtime.onInstalled.addListener(async () => {
   await checkAndFinalizeIncompleteRecordings();
 });
 
+// Storage bridge for contexts that don't expose chrome.storage (e.g. offscreen)
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.target !== 'service-worker-storage') {
+    return false;
+  }
+
+  (async () => {
+    try {
+      switch (message.type) {
+        case 'storage-get': {
+          const data = await chrome.storage.local.get(message.keys);
+          sendResponse({ success: true, data });
+          break;
+        }
+        case 'storage-set': {
+          await chrome.storage.local.set(message.items || {});
+          sendResponse({ success: true });
+          break;
+        }
+        case 'storage-remove': {
+          await chrome.storage.local.remove(message.keys);
+          sendResponse({ success: true });
+          break;
+        }
+        default:
+          sendResponse({ success: false, error: 'Unknown storage bridge operation' });
+      }
+    } catch (error) {
+      console.error('Storage bridge error:', error);
+      sendResponse({ success: false, error: error.message });
+    }
+  })();
+
+  return true;
+});
+
 // Helper function to check and finalize incomplete recordings
 async function checkAndFinalizeIncompleteRecordings() {
   try {

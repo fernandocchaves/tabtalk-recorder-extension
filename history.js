@@ -3,10 +3,27 @@ const emptyState = document.getElementById("emptyState");
 let currentlyPlayingAudio = null;
 let currentlyPlayingButton = null;
 let chunkPlaybackState = null; // Track sequential chunk playback
+let userSettingsCache = null;
+
+async function loadUserSettingsCache() {
+  try {
+    if (typeof window !== 'undefined' && window.configManager) {
+      await window.configManager.load();
+      userSettingsCache = window.configManager.getAll();
+    }
+  } catch (error) {
+    console.warn('Failed to load user settings for history view, using defaults:', error);
+    userSettingsCache = null;
+  }
+}
 
 // Helper function to get chunk duration from constants
 function getChunkDurationSeconds() {
-  return (window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000) / 1000;
+  const configuredMs = Number(userSettingsCache?.transcriptionChunkIntervalMs);
+  const chunkIntervalMs = Number.isFinite(configuredMs) && configuredMs > 0
+    ? configuredMs
+    : (window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000);
+  return chunkIntervalMs / 1000;
 }
 
 // Helper function to play chunks sequentially
@@ -1908,6 +1925,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  await loadUserSettingsCache();
+
   // Load history - recovery check is now integrated to avoid double DB queries
   await loadHistory();
 
@@ -1918,6 +1937,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'recording-stopped') {
       console.log('Recording stopped - reloading history');
+      loadHistory();
+    } else if (message.type === 'transcription-updated') {
+      console.log('Transcription updated - reloading history');
       loadHistory();
     }
   });

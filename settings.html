@@ -90,6 +90,30 @@
             </label>
           </div>
         </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="transcriptionChunkIntervalSeconds">Transcription Chunk Interval (seconds)</label>
+            <p class="setting-description">
+              Split long recordings into segments for Gemini transcription (lower values reduce token limit issues)
+            </p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="transcriptionChunkIntervalSeconds" min="15" max="600" step="5" value="60">
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label for="geminiTranscriptionMaxOutputTokens">Gemini Transcription Max Output Tokens</label>
+            <p class="setting-description">
+              Increase only if transcriptions are being truncated by the model
+            </p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="geminiTranscriptionMaxOutputTokens" min="1024" max="65536" step="256" value="16384">
+          </div>
+        </div>
       </div>
 
       <!-- Audio Settings -->

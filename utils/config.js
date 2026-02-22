@@ -13,6 +13,8 @@ const DEFAULT_CONFIG = {
   // Transcription settings
   transcriptionService: 'gemini',
   autoTranscribe: false,
+  transcriptionChunkIntervalMs: 60000, // Segment duration for transcription (1 minute default)
+  geminiTranscriptionMaxOutputTokens: 16384, // Max output tokens for Gemini transcription responses
 
   // UI settings
   showNotifications: true,

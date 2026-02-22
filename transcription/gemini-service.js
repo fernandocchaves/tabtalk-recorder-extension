@@ -8,6 +8,117 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     this.model = "gemini-2.5-flash"; // Default model
   }
 
+  _isDebugLoggingEnabled() {
+    return Boolean(window?.RECORDING_CONSTANTS?.DEBUG_TRANSCRIPTION_LOGS);
+  }
+
+  _debugLog(...args) {
+    if (this._isDebugLoggingEnabled()) {
+      this._debugLog(...args);
+    }
+  }
+
+  async _storageGet(keys) {
+    if (chrome?.storage?.local) {
+      return chrome.storage.local.get(keys);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'storage-get',
+      target: 'service-worker-storage',
+      keys
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'storage-get bridge failed');
+    }
+
+    return response.data || {};
+  }
+
+  async _storageSet(items) {
+    if (chrome?.storage?.local) {
+      return chrome.storage.local.set(items);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'storage-set',
+      target: 'service-worker-storage',
+      items
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'storage-set bridge failed');
+    }
+  }
+
+  async _storageRemove(keys) {
+    if (chrome?.storage?.local) {
+      return chrome.storage.local.remove(keys);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'storage-remove',
+      target: 'service-worker-storage',
+      keys
+    });
+
+    if (!response?.success) {
+      throw new Error(response?.error || 'storage-remove bridge failed');
+    }
+  }
+
+  async _getUserConfig() {
+    try {
+      const result = await this._storageGet('user_settings');
+      if (result?.user_settings && typeof result.user_settings === 'object') {
+        const defaults = (typeof window !== 'undefined' && window.DEFAULT_CONFIG)
+          ? window.DEFAULT_CONFIG
+          : {};
+        return { ...defaults, ...result.user_settings };
+      }
+    } catch (error) {
+      console.warn('Direct user_settings read failed for Gemini settings, trying ConfigManager:', error);
+    }
+
+    try {
+      if (typeof window !== 'undefined' && window.configManager) {
+        await window.configManager.load();
+        return window.configManager.getAll();
+      }
+
+      if (typeof ConfigManager !== 'undefined') {
+        const configManager = new ConfigManager();
+        return await configManager.load();
+      }
+    } catch (error) {
+      console.warn('Failed to load user config for Gemini settings, using defaults:', error);
+    }
+
+    return {};
+  }
+
+  _sanitizeTranscriptionChunkIntervalMs(value) {
+    const fallback = window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.min(600000, Math.max(15000, Math.round(numeric)));
+  }
+
+  _sanitizeGeminiTranscriptionMaxOutputTokens(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 16384;
+    return Math.min(65536, Math.max(1024, Math.round(numeric)));
+  }
+
+  async _getTranscriptionRuntimeSettings() {
+    const userConfig = await this._getUserConfig();
+    return {
+      chunkIntervalMs: this._sanitizeTranscriptionChunkIntervalMs(userConfig.transcriptionChunkIntervalMs),
+      maxOutputTokens: this._sanitizeGeminiTranscriptionMaxOutputTokens(userConfig.geminiTranscriptionMaxOutputTokens)
+    };
+  }
+
   getInfo() {
     return {
       name: 'Google Gemini API',
@@ -26,7 +137,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       if (onProgress) onProgress('Checking Gemini API configuration...');
 
       // Try to load API key and model from storage
-      const result = await chrome.storage.local.get(['gemini_api_key', 'gemini_model']);
+      const result = await this._storageGet(['gemini_api_key', 'gemini_model']);
       this.apiKey = result.gemini_api_key;
       this.model = result.gemini_model || "gemini-2.5-flash";
 
@@ -47,7 +158,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
           if (this.apiKey) {
             // Save API key for future use
-            await chrome.storage.local.set({ gemini_api_key: this.apiKey });
+            await this._storageSet({ gemini_api_key: this.apiKey });
           }
         }
 
@@ -76,6 +187,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       // Convert data URL to base64
       const base64Audio = audioDataUrl.split(',')[1];
+      const { maxOutputTokens } = await this._getTranscriptionRuntimeSettings();
 
       if (onProgress) onProgress('Sending to Gemini...');
 
@@ -105,7 +217,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
               temperature: 0.1,
               topK: 1,
               topP: 0.95,
-              maxOutputTokens: 16384,
+              maxOutputTokens,
             }
           })
         }
@@ -137,7 +249,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       // If API key is invalid, clear it
       if (this._isAuthError(error)) {
-        await chrome.storage.local.remove('gemini_api_key');
+        await this._storageRemove('gemini_api_key');
         this.isReady = false;
         this.apiKey = null;
       }
@@ -310,7 +422,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
       // If API key is invalid, clear it
       if (this._isAuthError(error)) {
-        await chrome.storage.local.remove('gemini_api_key');
+        await this._storageRemove('gemini_api_key');
         this.isReady = false;
         this.apiKey = null;
       }
@@ -338,7 +450,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       // Get all chunks for this recording from IndexedDB
       const rawChunks = await this._getRecordingChunks(recordingKey);
 
-      console.log(`[CHUNKED TRANSCRIPTION] Found ${rawChunks.length} chunks for ${recordingKey}`);
+      this._debugLog(`[CHUNKED TRANSCRIPTION] Found ${rawChunks.length} chunks for ${recordingKey}`);
 
       if (!rawChunks || rawChunks.length === 0) {
         throw new Error('No audio chunks found for this recording');
@@ -348,23 +460,24 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       let recordingChunks;
       const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || rawChunks[0]?.format === 'pcm-int16' || metadata?.isPcm;
 
-      console.log(`[CHUNKED TRANSCRIPTION] Format detection: rawChunks[0].format="${rawChunks[0]?.format}", metadata.isPcm=${metadata?.isPcm}, isPcmFormat=${isPcmFormat}`);
+      this._debugLog(`[CHUNKED TRANSCRIPTION] Format detection: rawChunks[0].format="${rawChunks[0]?.format}", metadata.isPcm=${metadata?.isPcm}, isPcmFormat=${isPcmFormat}`);
 
       if (isPcmFormat) {
-        console.log(`[CHUNKED TRANSCRIPTION] ✓ Detected PCM format, using streaming transcription`);
+        this._debugLog(`[CHUNKED TRANSCRIPTION] ✓ Detected PCM format, using streaming transcription`);
         // Use streaming transcription for PCM (memory-efficient)
         return await this._transcribePcmStreaming(recordingKey, rawChunks, metadata, onProgress);
       } else {
         // Use WebM chunks directly (legacy format)
-        console.log(`[CHUNKED TRANSCRIPTION] ⚠ Legacy WebM format detected - using old chunking (not time-based)`);
+        this._debugLog(`[CHUNKED TRANSCRIPTION] ⚠ Legacy WebM format detected - using old chunking (not time-based)`);
         recordingChunks = rawChunks;
 
         // Transcribe WebM chunks individually
         const totalChunks = recordingChunks.length;
         const transcriptions = [];
         const RATE_LIMIT_DELAY = 4000;
+        const { maxOutputTokens } = await this._getTranscriptionRuntimeSettings();
 
-        console.log(`[CHUNKED TRANSCRIPTION] Will transcribe ${totalChunks} WebM chunks individually`);
+        this._debugLog(`[CHUNKED TRANSCRIPTION] Will transcribe ${totalChunks} WebM chunks individually`);
 
         if (onProgress) {
           onProgress(`Starting transcription of ${totalChunks} segments...`, 0, totalChunks);
@@ -381,9 +494,9 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
           try {
             const mimeType = 'audio/webm';
             const sizeInMB = (chunk.data.length / (1024 * 1024)).toFixed(2);
-            console.log(`[CHUNKED TRANSCRIPTION] Segment ${i + 1}: size=${sizeInMB} MB, format=${mimeType}`);
-            const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType);
-            console.log(`[CHUNKED TRANSCRIPTION] Segment ${i + 1} transcription length: ${chunkTranscription.length} chars`);
+            this._debugLog(`[CHUNKED TRANSCRIPTION] Segment ${i + 1}: size=${sizeInMB} MB, format=${mimeType}`);
+            const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType, maxOutputTokens);
+            this._debugLog(`[CHUNKED TRANSCRIPTION] Segment ${i + 1} transcription length: ${chunkTranscription.length} chars`);
             transcriptions.push(chunkTranscription);
 
             await this._saveTranscriptionProgress(recordingKey, i, chunkTranscription);
@@ -392,7 +505,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
               const elapsedTime = Date.now() - requestStartTime;
               const remainingDelay = Math.max(0, RATE_LIMIT_DELAY - elapsedTime);
               if (remainingDelay > 0) {
-                console.log(`[CHUNKED TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
+                this._debugLog(`[CHUNKED TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
                 await this._sleep(remainingDelay);
               }
             }
@@ -426,18 +539,18 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     const originalSampleRate = metadata.sampleRate || 48000;
     const numberOfChannels = metadata.numberOfChannels || 1;
 
-    const chunkIntervalMs = window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
+    const { chunkIntervalMs, maxOutputTokens } = await this._getTranscriptionRuntimeSettings();
     const originalSamplesPerSegment = Math.floor((chunkIntervalMs / 1000) * originalSampleRate);
     const RATE_LIMIT_DELAY = 4000;
 
-    console.log(`[PCM STREAMING] Processing ${pcmChunks.length} storage chunks into streaming transcription segments`);
-    console.log(`[PCM STREAMING] Segment size: ${originalSamplesPerSegment} samples (${chunkIntervalMs}ms)`);
+    this._debugLog(`[PCM STREAMING] Processing ${pcmChunks.length} storage chunks into streaming transcription segments`);
+    this._debugLog(`[PCM STREAMING] Segment size: ${originalSamplesPerSegment} samples (${chunkIntervalMs}ms)`);
 
     // Calculate total segments for progress tracking
     const totalSamples = pcmChunks.reduce((sum, chunk) => sum + (chunk.samplesCount || 0), 0);
     const totalSegments = Math.ceil(totalSamples / originalSamplesPerSegment);
 
-    console.log(`[PCM STREAMING] Estimated ${totalSegments} segments from ${totalSamples} samples`);
+    this._debugLog(`[PCM STREAMING] Estimated ${totalSegments} segments from ${totalSamples} samples`);
 
     const transcriptions = [];
     let currentSegmentData = [];
@@ -454,13 +567,13 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         if (storageChunkIdx >= pcmChunks.length) {
           // No more chunks to load - check if we have remaining data to process
           if (currentSegmentSamples > 0) {
-            console.log(`[PCM STREAMING] Processing final segment with ${currentSegmentSamples} samples`);
+            this._debugLog(`[PCM STREAMING] Processing final segment with ${currentSegmentSamples} samples`);
             pcmData = null;
           } else {
             break; // Nothing left to process
           }
         } else {
-          console.log(`[PCM STREAMING] Loading storage chunk ${storageChunkIdx + 1}/${pcmChunks.length}`);
+          this._debugLog(`[PCM STREAMING] Loading storage chunk ${storageChunkIdx + 1}/${pcmChunks.length}`);
           const chunk = pcmChunks[storageChunkIdx];
 
           // Decode PCM data (supports both Int16 and Float32 formats)
@@ -498,7 +611,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
           segmentOffset += part.length;
         }
 
-        console.log(`[PCM STREAMING] Segment ${segmentNumber + 1}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s)`);
+        this._debugLog(`[PCM STREAMING] Segment ${segmentNumber + 1}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s)`);
 
         if (onProgress) {
           onProgress(`Transcribing segment ${segmentNumber + 1}/${totalSegments}...`, segmentNumber, totalSegments);
@@ -507,15 +620,15 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         // Convert to WAV data URL and transcribe immediately
         const wavDataUrl = this._pcmFloat32ToWavDataUrl(concatenated, originalSampleRate, numberOfChannels);
         const sizeInMB = (wavDataUrl.length / (1024 * 1024)).toFixed(2);
-        console.log(`[PCM STREAMING] Segment ${segmentNumber + 1} WAV size: ${sizeInMB} MB`);
+        this._debugLog(`[PCM STREAMING] Segment ${segmentNumber + 1} WAV size: ${sizeInMB} MB`);
 
         try {
-          const transcription = await this._transcribeSingleChunk(wavDataUrl, segmentNumber + 1, 'audio/wav');
-          console.log(`[PCM STREAMING] Segment ${segmentNumber + 1} transcription: ${transcription.length} chars`);
+          const transcription = await this._transcribeSingleChunk(wavDataUrl, segmentNumber + 1, 'audio/wav', maxOutputTokens);
+          this._debugLog(`[PCM STREAMING] Segment ${segmentNumber + 1} transcription: ${transcription.length} chars`);
           if (transcription.length === 0) {
             console.warn(`[PCM STREAMING] WARNING: Segment ${segmentNumber + 1} returned empty transcription!`);
           } else {
-            console.log(`[PCM STREAMING] Segment ${segmentNumber + 1} preview: "${transcription.substring(0, 100)}..."`);
+            this._debugLog(`[PCM STREAMING] Segment ${segmentNumber + 1} preview: "${transcription.substring(0, 100)}..."`);
           }
           transcriptions.push(transcription);
 
@@ -527,7 +640,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
             const elapsedTime = Date.now() - requestStartTime;
             const remainingDelay = Math.max(0, RATE_LIMIT_DELAY - elapsedTime);
             if (remainingDelay > 0) {
-              console.log(`[PCM STREAMING] Waiting ${remainingDelay}ms before next segment`);
+              this._debugLog(`[PCM STREAMING] Waiting ${remainingDelay}ms before next segment`);
               await this._sleep(remainingDelay);
             }
           }
@@ -546,7 +659,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     }
 
     const finalTranscription = transcriptions.join(' ');
-    console.log(`[PCM STREAMING] Completed: ${segmentNumber} segments transcribed, ${finalTranscription.length} total characters`);
+    this._debugLog(`[PCM STREAMING] Completed: ${segmentNumber} segments transcribed, ${finalTranscription.length} total characters`);
 
     if (onProgress) {
       onProgress('Transcription complete!', segmentNumber, segmentNumber, finalTranscription);
@@ -585,7 +698,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       const isPcmFormat = rawChunks[0]?.format === 'pcm-float32' || rawChunks[0]?.format === 'pcm-int16' || metadata?.isPcm;
 
       if (isPcmFormat) {
-        console.log(`[RESUME TRANSCRIPTION] Detected PCM format, converting to WAV segments`);
+        this._debugLog(`[RESUME TRANSCRIPTION] Detected PCM format, converting to WAV segments`);
         if (onProgress) {
           onProgress('Converting PCM audio to transcription segments...', 0, 1);
         }
@@ -600,6 +713,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       const transcriptions = [...state.completedTranscriptions];
       const startFromChunk = state.lastCompletedChunk + 1;
       const RATE_LIMIT_DELAY = 4000;
+      const { maxOutputTokens } = await this._getTranscriptionRuntimeSettings();
 
       if (onProgress) {
         onProgress(`Resuming from segment ${startFromChunk + 1}/${totalChunks}...`, startFromChunk, totalChunks);
@@ -616,7 +730,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
 
         try {
           const mimeType = isPcmFormat ? 'audio/wav' : 'audio/webm';
-          const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType);
+          const chunkTranscription = await this._transcribeSingleChunk(chunk.data, i + 1, mimeType, maxOutputTokens);
           transcriptions.push(chunkTranscription);
 
           await this._saveTranscriptionProgress(recordingKey, i, chunkTranscription);
@@ -626,7 +740,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
             const elapsedTime = Date.now() - requestStartTime;
             const remainingDelay = Math.max(0, RATE_LIMIT_DELAY - elapsedTime);
             if (remainingDelay > 0) {
-              console.log(`[RESUME TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
+              this._debugLog(`[RESUME TRANSCRIPTION] Waiting ${remainingDelay}ms before next request`);
               await this._sleep(remainingDelay);
             }
           }
@@ -710,18 +824,14 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     const numberOfChannels = metadata.numberOfChannels || 1;
     const targetSampleRate = 16000; // Always downsample to 16kHz for transcription
 
-    // Get transcription chunk interval from constants (default 60 seconds)
-    console.log('[DEBUG] window.RECORDING_CONSTANTS:', window.RECORDING_CONSTANTS);
-    console.log('[DEBUG] TRANSCRIPTION_CHUNK_INTERVAL_MS:', window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS);
-
-    const chunkIntervalMs = window.RECORDING_CONSTANTS?.TRANSCRIPTION_CHUNK_INTERVAL_MS || 60000;
+    const { chunkIntervalMs } = await this._getTranscriptionRuntimeSettings();
 
     // Calculate samples per segment based on original sample rate
     const originalSamplesPerSegment = Math.floor((chunkIntervalMs / 1000) * originalSampleRate);
 
-    console.log(`[PCM TRANSCRIPTION] Original rate: ${originalSampleRate} Hz, Target rate: ${targetSampleRate} Hz`);
-    console.log(`[PCM TRANSCRIPTION] Chunk interval: ${chunkIntervalMs}ms`);
-    console.log(`[PCM TRANSCRIPTION] Samples per segment: ${originalSamplesPerSegment}`);
+    this._debugLog(`[PCM TRANSCRIPTION] Original rate: ${originalSampleRate} Hz, Target rate: ${targetSampleRate} Hz`);
+    this._debugLog(`[PCM TRANSCRIPTION] Chunk interval: ${chunkIntervalMs}ms`);
+    this._debugLog(`[PCM TRANSCRIPTION] Samples per segment: ${originalSamplesPerSegment}`);
 
     // Process chunks on-the-fly instead of concatenating everything at once (prevents memory issues for large files)
     const segments = [];
@@ -730,7 +840,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     let segmentNumber = 0;
     let totalProcessedSamples = 0;
 
-    console.log(`[PCM TRANSCRIPTION] Processing ${pcmChunks.length} storage chunks into transcription segments...`);
+    this._debugLog(`[PCM TRANSCRIPTION] Processing ${pcmChunks.length} storage chunks into transcription segments...`);
 
     for (let chunkIdx = 0; chunkIdx < pcmChunks.length; chunkIdx++) {
       const chunk = pcmChunks[chunkIdx];
@@ -738,7 +848,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       // Decode PCM data (supports both Int16 and Float32 formats)
       const pcmData = this._decodePcmChunk(chunk);
 
-      console.log(`[PCM TRANSCRIPTION] Loaded storage chunk ${chunkIdx + 1}/${pcmChunks.length}: ${pcmData.length} samples`);
+      this._debugLog(`[PCM TRANSCRIPTION] Loaded storage chunk ${chunkIdx + 1}/${pcmChunks.length}: ${pcmData.length} samples`);
 
       // Process this chunk's data into segments
       let sampleOffset = 0;
@@ -772,7 +882,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
             duration: concatenated.length / originalSampleRate
           });
 
-          console.log(`[PCM TRANSCRIPTION] Segment ${segmentNumber}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s), total processed: ${totalProcessedSamples}`);
+          this._debugLog(`[PCM TRANSCRIPTION] Segment ${segmentNumber}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s), total processed: ${totalProcessedSamples}`);
 
           // Reset for next segment
           currentSegmentData = [];
@@ -807,10 +917,10 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
         duration: concatenated.length / originalSampleRate
       });
 
-      console.log(`[PCM TRANSCRIPTION] Final segment ${segmentNumber}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s)`);
+      this._debugLog(`[PCM TRANSCRIPTION] Final segment ${segmentNumber}: ${concatenated.length} samples (${(concatenated.length / originalSampleRate).toFixed(2)}s)`);
     }
 
-    console.log(`[PCM TRANSCRIPTION] Created ${segments.length} transcription segments from ${pcmChunks.length} storage chunks`);
+    this._debugLog(`[PCM TRANSCRIPTION] Created ${segments.length} transcription segments from ${pcmChunks.length} storage chunks`);
     return segments;
   }
 
@@ -825,7 +935,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     const targetSampleRate = 16000;
     const downsampledData = this._downsample(pcmData, sampleRate, targetSampleRate);
 
-    console.log(`[WAV CONVERSION] Original sample rate: ${sampleRate} Hz, Target: ${targetSampleRate} Hz, Samples: ${pcmData.length} -> ${downsampledData.length}`);
+    this._debugLog(`[WAV CONVERSION] Original sample rate: ${sampleRate} Hz, Target: ${targetSampleRate} Hz, Samples: ${pcmData.length} -> ${downsampledData.length}`);
 
     const bytesPerSample = 2; // 16-bit audio
     const blockAlign = numberOfChannels * bytesPerSample;
@@ -1001,8 +1111,9 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    * Transcribe a single audio segment (may contain multiple merged chunks)
    * @private
    */
-  async _transcribeSingleChunk(audioDataUrl, segmentNumber, mimeType = 'audio/webm') {
+  async _transcribeSingleChunk(audioDataUrl, segmentNumber, mimeType = 'audio/webm', configuredMaxOutputTokens = null) {
     const base64Audio = audioDataUrl.split(',')[1];
+    const maxOutputTokens = configuredMaxOutputTokens ?? (await this._getTranscriptionRuntimeSettings()).maxOutputTokens;
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
@@ -1029,7 +1140,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
             temperature: 0.1,
             topK: 1,
             topP: 0.95,
-            maxOutputTokens: 16384, // Increased for longer Portuguese transcriptions
+            maxOutputTokens,
           }
         })
       }
@@ -1046,7 +1157,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
     const finishReason = data.candidates?.[0]?.finishReason;
     if (finishReason === 'MAX_TOKENS') {
       console.error(`[TRANSCRIPTION] Segment ${segmentNumber} hit MAX_TOKENS limit! Response was truncated.`);
-      console.error(`[TRANSCRIPTION] Consider reducing TRANSCRIPTION_CHUNK_INTERVAL_MS further.`);
+      console.error('[TRANSCRIPTION] Consider reducing the transcription chunk interval in Settings or increasing Gemini Transcription Max Output Tokens.');
     }
 
     const transcription = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -1066,7 +1177,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
   async _saveTranscriptionProgress(recordingKey, chunkIndex, transcription, error = null) {
     const stateKey = `transcription_state_${recordingKey}`;
 
-    let state = await chrome.storage.local.get(stateKey).then(r => r[stateKey] || {
+    let state = await this._storageGet(stateKey).then(r => r[stateKey] || {
       recordingKey,
       completedTranscriptions: [],
       lastCompletedChunk: -1,
@@ -1084,7 +1195,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
       state.lastUpdated = Date.now();
     }
 
-    await chrome.storage.local.set({ [stateKey]: state });
+    await this._storageSet({ [stateKey]: state });
   }
 
   /**
@@ -1093,7 +1204,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    */
   async _getTranscriptionState(recordingKey) {
     const stateKey = `transcription_state_${recordingKey}`;
-    const result = await chrome.storage.local.get(stateKey);
+    const result = await this._storageGet(stateKey);
     return result[stateKey] || null;
   }
 
@@ -1102,7 +1213,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
    */
   async clearTranscriptionState(recordingKey) {
     const stateKey = `transcription_state_${recordingKey}`;
-    await chrome.storage.local.remove(stateKey);
+    await this._storageRemove(stateKey);
   }
 
   /**
@@ -1122,7 +1233,7 @@ class GeminiTranscriptionService extends BaseTranscriptionService {
   }
 
   async clearApiKey() {
-    await chrome.storage.local.remove('gemini_api_key');
+    await this._storageRemove('gemini_api_key');
     this.isReady = false;
     this.apiKey = null;
   }
