@@ -417,11 +417,11 @@ async function startRecording(streamId) {
       isRecordingVideo = true;
       recordingMimeType =
         (typeof MediaRecorder !== "undefined" &&
-          MediaRecorder.isTypeSupported?.("video/webm;codecs=vp9,opus") &&
-          "video/webm;codecs=vp9,opus") ||
-        (typeof MediaRecorder !== "undefined" &&
           MediaRecorder.isTypeSupported?.("video/webm;codecs=vp8,opus") &&
           "video/webm;codecs=vp8,opus") ||
+        (typeof MediaRecorder !== "undefined" &&
+          MediaRecorder.isTypeSupported?.("video/webm;codecs=vp9,opus") &&
+          "video/webm;codecs=vp9,opus") ||
         "video/webm";
       console.log("Tab video capture enabled");
     } else {
@@ -447,12 +447,14 @@ async function startRecording(streamId) {
 
     recorder.onstop = async () => {
       console.log("Recorder stopped. Finalizing...");
+      await stopAllStreams();
       await finalizeRecording();
       cleanup();
     };
 
-    // Start continuous recording (no stopping/restarting)
-    recorder.start(1000); // Get data every second for crash recovery
+    // Start recorder without timeslice to produce a more portable final WebM file.
+    // Crash recovery relies on PCM chunks, not MediaRecorder chunks.
+    recorder.start();
     window.location.hash = "recording";
 
     // Initialize recording session
@@ -503,16 +505,16 @@ async function startRecording(streamId) {
 async function stopRecording() {
   if (recorder && recorder.state === "recording") {
     recorder.stop();
+  } else {
+    await stopAllStreams();
+    window.location.hash = "";
+
+    chrome.runtime.sendMessage({
+      type: "update-icon",
+      target: "service-worker",
+      recording: false,
+    });
   }
-
-  await stopAllStreams();
-  window.location.hash = "";
-
-  chrome.runtime.sendMessage({
-    type: "update-icon",
-    target: "service-worker",
-    recording: false,
-  });
 }
 
 function cleanup() {
@@ -536,6 +538,7 @@ function cleanup() {
   destination = null;
   isRecordingVideo = false;
   recordingMimeType = "audio/webm";
+  window.location.hash = "";
 
   chrome.runtime.sendMessage({
     type: "clear-recording-state",
@@ -545,6 +548,12 @@ function cleanup() {
   chrome.runtime.sendMessage({
     type: "recording-stopped",
     target: "service-worker",
+  });
+
+  chrome.runtime.sendMessage({
+    type: "update-icon",
+    target: "service-worker",
+    recording: false,
   });
 }
 
